@@ -1,0 +1,132 @@
+faults:
+  - id: af_ac_contactor
+    title: "AC Contactor Fault"
+    symptoms:
+      - "Charger won’t start / precharge fails"
+      - "AC contactor fault shown in Autel UI"
+    safety:
+      - "LOTO / isolate supply before opening cabinet"
+      - "Verify no voltage present"
+    checks:
+      - "Check incoming AC supply and phase balance"
+      - "Check contactor coil wiring + terminals for heat damage"
+      - "Check control voltage to coil when command is active"
+      - "Inspect for welded contacts / burnt contactor"
+    actions:
+      - "Power cycle and re-test after visual checks"
+      - "If contactor is welded/burnt: replace contactor"
+      - "If no coil command: trace back to control PCB/IO"
+    escalation:
+      - "Collect logs + photos of contactor/terminals"
+      - "Escalate to Autel support with fault ID + findings"
+  - id: dc_contactor_fault
+    title: "DC Contactor Fault"
+    symptoms:
+      - "Precharge fails / contactor fault in UI"
+      - "Charger won’t start or drops out early"
+      - "Intermittent start failures"
+    safety:
+      - "LOTO / isolate supply before opening cabinet"
+      - "Prove dead + wait for DC bus discharge"
+    checks:
+      - "Check contactor coil command voltage during start sequence"
+      - "Inspect contactor for heat damage, pitting, welded contacts"
+      - "Check coil wiring, terminals, and control output from IO"
+      - "Verify auxiliary feedback changes state (NO/NC correct)"
+      - "Check DC bus voltage decay / precharge path components"
+    actions:
+      - "Power cycle and re-test after visual inspection"
+      - "Re-terminate wiring and torque terminations"
+      - "Replace contactor if coil commanded but no pull-in / welded contacts"
+    escalation:
+      - "Send logs + time of event"
+      - "Coil voltage readings + aux state readings"
+      - "Photos of contactor + terminals + any heat marks"
+
+  - id: insulation_monitor_fault
+    title: "Insulation Monitoring / IMD Fault"
+    symptoms:
+      - "Insulation fault or IMD alarm"
+      - "Unit will not enable DC output"
+      - "Fault may appear after rain or washdown"
+    safety:
+      - "LOTO / prove dead"
+      - "Treat as potentially hazardous leakage until proven otherwise"
+    checks:
+      - "Inspect for water ingress in cabinet, base, glands, filters"
+      - "Check DC output cables/connectors for damage or moisture"
+      - "Inspect DC bus bars for tracking/contamination"
+      - "If site safe/approved: insulation test per manufacturer procedure"
+    actions:
+      - "Dry out / clean contamination (only if permitted by procedure)"
+      - "Rectify water ingress pathways and replace damaged seals/glands"
+      - "Re-test after remediation and confirm IMD clears"
+    escalation:
+      - "Provide fault code + timestamp + site weather conditions"
+      - "Photos of suspected ingress points"
+      - "Insulation readings (if taken) and method used"
+
+  - id: communication_fault_ocpp
+    title: "OCPP / Backend Communication Fault"
+    symptoms:
+      - "Offline in backend / OCPP disconnected"
+      - "Charging may still work locally but not remotely"
+      - "Sessions fail to start if backend authorization required"
+    safety:
+      - "No special electrical work unless opening cabinet (then LOTO)"
+    checks:
+      - "Check modem signal strength / registration (SIM active)"
+      - "Verify APN, IP mode, DNS settings (site standard)"
+      - "Confirm OCPP URL and certificates (if applicable)"
+      - "Check time/date correct (TLS can fail if clock wrong)"
+      - "Power cycle modem/control module and re-check status"
+    actions:
+      - "Reboot charger and confirm OCPP reconnect"
+      - "Re-seat comms cables and check router/switch ports if used"
+      - "If persistent: capture logs and network stats"
+    escalation:
+      - "Send logs + OCPP status screenshots"
+      - "SIM ICCID + carrier + signal readings"
+      - "OCPP endpoint details (redact credentials)"
+
+  - id: emergency_stop_active
+    title: "E-Stop / Interlock Active"
+    symptoms:
+      - "Unit won’t start, interlock/E-stop shown"
+      - "Contactors will not energize"
+    safety:
+      - "Do not bypass safety circuits"
+      - "If opening cabinet: LOTO + prove dead"
+    checks:
+      - "Confirm all E-stops released (including remote pedestals if any)"
+      - "Check door interlock switch alignment and wiring"
+      - "Check safety loop continuity (where accessible/allowed)"
+      - "Inspect for broken wiring, loose terminals, damaged switch"
+    actions:
+      - "Reset E-stop correctly and confirm UI clears"
+      - "Repair/replace faulty interlock device if identified"
+    escalation:
+      - "Provide fault screenshot + which interlock indicated"
+      - "Photos of interlock device and wiring terminations"
+
+  - id: cooling_fan_fault_overtemp
+    title: "Cooling / Fan Fault (Overtemp Risk)"
+    symptoms:
+      - "Fans not running / noisy / airflow hot"
+      - "Derates or overheats under load"
+      - "Overtemp or thermal warning"
+    safety:
+      - "LOTO before opening cabinet"
+      - "Beware hot surfaces"
+    checks:
+      - "Check filters for blockage and replace if dirty"
+      - "Verify fans spin freely and are powered when commanded"
+      - "Inspect ducts and heatsinks for blockage/dust"
+      - "Check temperature sensor readings if available"
+    actions:
+      - "Clean/replace filters, clear airflow paths"
+      - "Replace failed fan assembly if not operating"
+      - "Re-test under load and monitor temps"
+    escalation:
+      - "Send logs + temp readings + time of fault"
+      - "Photos of filters/fans/heatsinks"
