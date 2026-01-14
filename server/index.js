@@ -1,8 +1,9 @@
 /**
  * EVBot backend (Express + YAML fault library + Telegram bot)
  * - Works locally (polling) and on Railway (webhook)
- * - /autel shows Autel faults + AC Contactor decision tree
+ * - /autel shows Autel faults (YAML) + supports YAML decision_tree
  * - /report generates a client-ready service report
+ * - Includes legacy hard-coded AC decision tree (ac:*) still available
  *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
@@ -135,7 +136,6 @@ const bot = new TelegramBot(
     : {
         polling: {
           interval: 1000,
-          // node-telegram-bot-api deprecates polling.timeout; use params.timeout
           params: { timeout: 20 },
         },
       }
@@ -146,10 +146,7 @@ bot.on("webhook_error", (e) => console.error("❌ webhook_error:", e?.message ||
 
 // ------------------- HELPERS -------------------
 function escapeHtml(str) {
-  return String(str)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return String(str).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function kb(rows) {
@@ -174,17 +171,181 @@ async function upsertMessage(chatId, opts) {
   return bot.sendMessage(chatId, text, { parse_mode, reply_markup });
 }
 
-// ------------------- /report WIZARD -------------------
-// In-memory state per chat (fine for v1; resets on restart)
+// ------------------- STATE -------------------
 const reportState = new Map();
 
-/**
- * reportState structure:
- * {
- *   step: "site" | "charger" | "fault" | "actions" | "resolution" | "notes" | "done",
- *   data: { site, chargerId, faultTitle, actions: [], resolution, notes }
- * }
- */
+// ✅ Decision-tree state with HISTORY
+// chatId -> { faultId: string, history: string[] }
+const dtState = new Map();
+
+// ------------------- YAML DECISION TREE SUPPORT -------------------
+function dtCallback(faultId, nodeId) {
+  return `DT|${faultId}|${nodeId}`;
+}
+function dtBackCallback(faultId) {
+  return `DTB|${faultId}`;
+}
+
+function getAutelFaultById(id) {
+  const autel = loadAutel();
+  return (autel.faults || []).find((x) => String(x.id) === String(id));
+}
+
+function resetDt(chatId) {
+  dtState.delete(chatId);
+}
+
+// Push node into history (avoid duplicates)
+function pushDtHistory(chatId, faultId, nodeId) {
+  const cur = dtState.get(chatId);
+
+  if (!cur || String(cur.faultId) !== String(faultId)) {
+    dtState.set(chatId, { faultId: String(faultId), history: [String(nodeId)] });
+    return;
+  }
+
+  const hist = cur.history || [];
+  const last = hist[hist.length - 1];
+
+  if (String(last) !== String(nodeId)) {
+    hist.push(String(nodeId));
+    dtState.set(chatId, { ...cur, history: hist });
+  }
+}
+
+// Pop current node and return previous (or null)
+function popDtHistory(chatId, faultId) {
+  const cur = dtState.get(chatId);
+  if (!cur || String(cur.faultId) !== String(faultId)) return null;
+
+  const hist = Array.isArray(cur.history) ? [...cur.history] : [];
+  if (hist.length <= 1) return null; // nothing to go back to
+
+  // remove current
+  hist.pop();
+  const prev = hist[hist.length - 1] || null;
+
+  dtState.set(chatId, { ...cur, history: hist });
+  return prev;
+}
+
+// Legacy HTML renderer (keeps older YAML shapes working)
+function buildLegacyFaultHtml(f) {
+  const lines = [];
+  lines.push(`🧰 <b>${escapeHtml(f.title || "Fault")}</b>`);
+
+  if (f.symptoms?.length) {
+    lines.push(`\n<b>Symptoms:</b>`);
+    f.symptoms.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
+  }
+  if (f.safety?.length) {
+    lines.push(`\n<b>Safety:</b>`);
+    f.safety.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
+  }
+  if (f.checks?.length) {
+    lines.push(`\n<b>Checks:</b>`);
+    f.checks.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
+  }
+  if (f.actions?.length) {
+    lines.push(`\n<b>Actions:</b>`);
+    f.actions.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
+  }
+  if (f.escalation?.length) {
+    lines.push(`\n<b>Escalation:</b>`);
+    f.escalation.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
+  }
+
+  lines.push("\n");
+  return lines.join("\n");
+}
+
+async function showAutelFaultCard({ chatId, messageId, fault }) {
+  // leaving the fault card should reset the decision-tree history for clean UX
+  resetDt(chatId);
+
+  // Preferred: YAML field response.telegram_markdown
+  if (fault?.response?.telegram_markdown) {
+    const rows = [];
+
+    if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
+      rows.push([
+        {
+          text: "🧭 Start troubleshooting",
+          callback_data: dtCallback(fault.id, fault.decision_tree.start_node),
+        },
+      ]);
+    }
+
+    rows.push([{ text: "⬅️ Back", callback_data: "autel:menu" }]);
+
+    return upsertMessage(chatId, {
+      messageId,
+      text: fault.response.telegram_markdown,
+      parse_mode: "Markdown",
+      reply_markup: kb(rows),
+    });
+  }
+
+  // Fallback: old schema rendered to HTML
+  const html = buildLegacyFaultHtml(fault);
+
+  const rows = [];
+  if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
+    rows.push([
+      {
+        text: "🧭 Start troubleshooting",
+        callback_data: dtCallback(fault.id, fault.decision_tree.start_node),
+      },
+    ]);
+  }
+  rows.push([{ text: "⬅️ Back", callback_data: "autel:menu" }]);
+
+  return upsertMessage(chatId, {
+    messageId,
+    text: html,
+    parse_mode: "HTML",
+    reply_markup: kb(rows),
+  });
+}
+
+async function renderYamlDecisionNode({ chatId, messageId, fault, nodeId }) {
+  const tree = fault?.decision_tree;
+  const node = tree?.nodes?.[nodeId];
+
+  if (!node) {
+    return upsertMessage(chatId, {
+      messageId,
+      text: `⚠️ Decision node not found: ${nodeId}`,
+      parse_mode: "Markdown",
+      reply_markup: kb([[{ text: "⬅️ Back", callback_data: `AUTEL:${fault.id}` }]]),
+    });
+  }
+
+  // Track history for "Back one step"
+  pushDtHistory(chatId, fault.id, nodeId);
+
+  const text = node.prompt || "…";
+
+  // 1 button per row for clean UX
+  const rows = (node.options || []).map((opt) => [
+    { text: opt.label, callback_data: dtCallback(fault.id, opt.next) },
+  ]);
+
+  // ✅ Back now goes back ONE NODE, not to fault card
+  rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(fault.id) }]);
+
+  // menu option
+  rows.push([{ text: "🏠 Autel menu", callback_data: "autel:menu" }]);
+
+  return upsertMessage(chatId, {
+    messageId,
+    text,
+    parse_mode: "Markdown",
+    reply_markup: kb(rows),
+  });
+}
+
+// ------------------- /report WIZARD -------------------
 function setReport(chatId, patch) {
   const cur = reportState.get(chatId) || { step: "site", data: { actions: [] } };
   const next = {
@@ -351,7 +512,7 @@ async function finishReport(chatId) {
   });
 }
 
-// ------------------- AC CONTACTOR DECISION TREE -------------------
+// ------------------- LEGACY AC CONTACTOR DECISION TREE (kept) -------------------
 const AC = {
   start: {
     text:
@@ -367,7 +528,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   observe: {
     text: "🔎 <b>What do you observe?</b>\n\nChoose the closest match:",
     buttons: kb([
@@ -379,7 +539,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   noclunk: {
     text:
       "🔌 <b>No pull-in</b>\n\n" +
@@ -396,7 +555,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   coilcmd_yes: {
     text:
       "✅ <b>Coil command present</b>\n\n" +
@@ -416,7 +574,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   coilcmd_no: {
     text:
       "❌ <b>No coil command</b>\n\n" +
@@ -435,7 +592,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   coilcmd_unsure: {
     text:
       "🤔 <b>Not sure if coil voltage is present</b>\n\n" +
@@ -453,7 +609,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   clunkfault: {
     text:
       "🔁 <b>Clunks but fault remains</b>\n\n" +
@@ -471,7 +626,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   aux_yes: {
     text:
       "✅ <b>Aux changes correctly</b>\n\n" +
@@ -486,7 +640,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   aux_no: {
     text:
       "⚠️ <b>Aux not changing</b>\n\n" +
@@ -507,7 +660,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   aux_unsure: {
     text:
       "🤔 <b>Not sure if aux changes</b>\n\n" +
@@ -523,7 +675,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   intermittent: {
     text:
       "🌡️ <b>Intermittent fault</b>\n\n" +
@@ -543,7 +694,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   replace: {
     text:
       "🧾 <b>Replacement checklist</b>\n\n" +
@@ -561,7 +711,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   escalate: {
     text:
       "📈 <b>Escalation pack</b>\n\n" +
@@ -579,7 +728,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   wiring: {
     text:
       "🔧 <b>Wiring checklist</b>\n\n" +
@@ -594,7 +742,6 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-
   not_sure: {
     text:
       "🤔 <b>Not sure</b>\n\n" +
@@ -616,7 +763,7 @@ function buildAutelMenuKeyboard() {
   const data = loadAutel();
   const faults = data.faults || [];
 
-  const rows = [[{ text: "🧰 AC Contactor Fault (Decision Tree)", callback_data: "ac:start" }]];
+  const rows = [[{ text: "🧰 AC Contactor Fault (Legacy Tree)", callback_data: "ac:start" }]];
 
   if (!faults.length) {
     rows.push([{ text: "⚠️ No Autel faults loaded (check /debug/autel)", callback_data: "noop" }]);
@@ -626,6 +773,7 @@ function buildAutelMenuKeyboard() {
     });
   }
 
+  rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
   rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
   return rows;
 }
@@ -644,6 +792,7 @@ async function showAutelMenu(chatId, messageId) {
 bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
   clearReport(chatId);
+  resetDt(chatId);
   await showAutelMenu(chatId);
   await bot.sendMessage(chatId, "🔄 Reset complete. Select a troubleshooting option below 👇");
 });
@@ -653,6 +802,7 @@ bot.onText(/^\/ping$/, async (msg) => {
 });
 
 bot.onText(/^\/autel$/, async (msg) => {
+  resetDt(msg.chat.id);
   await showAutelMenu(msg.chat.id);
 });
 
@@ -662,6 +812,7 @@ bot.onText(/^\/report$/, async (msg) => {
 
 bot.onText(/^\/cancel$/, async (msg) => {
   clearReport(msg.chat.id);
+  resetDt(msg.chat.id);
   await bot.sendMessage(msg.chat.id, "✅ Cancelled.");
 });
 
@@ -671,11 +822,10 @@ bot.on("message", async (msg) => {
   const text = (msg?.text || "").trim();
   if (!chatId) return;
 
-  // Ignore commands here (handled by onText)
   if (text.startsWith("/")) return;
 
   const st = reportState.get(chatId);
-  if (!st) return; // not in report mode
+  if (!st) return;
 
   if (st.step === "site") {
     setReport(chatId, { data: { site: text } });
@@ -699,19 +849,55 @@ bot.on("callback_query", async (q) => {
   const messageId = q?.message?.message_id;
   const data = q?.data || "";
 
-  // Always answer callback quickly (stops Telegram "loading..." spinner)
   try {
     await bot.answerCallbackQuery(q.id);
   } catch (_) {}
 
   if (!chatId) return;
-
   if (data === "noop") return;
 
   // Global reset
   if (data === "reset") {
     clearReport(chatId);
+    resetDt(chatId);
     return showAutelMenu(chatId, messageId);
+  }
+
+  // ✅ DT BACK ONE STEP
+  if (data.startsWith("DTB|")) {
+    const [, faultId] = data.split("|");
+    const fault = getAutelFaultById(faultId);
+    if (!fault) {
+      resetDt(chatId);
+      return showAutelMenu(chatId, messageId);
+    }
+
+    const prevNode = popDtHistory(chatId, faultId);
+
+    // If nothing to pop, fall back to showing the fault card
+    if (!prevNode) {
+      return showAutelFaultCard({ chatId, messageId, fault });
+    }
+
+    return renderYamlDecisionNode({ chatId, messageId, fault, nodeId: prevNode });
+  }
+
+  // YAML decision tree next node
+  if (data.startsWith("DT|")) {
+    const [, faultId, nodeId] = data.split("|");
+    const fault = getAutelFaultById(faultId);
+
+    if (!fault) {
+      resetDt(chatId);
+      return upsertMessage(chatId, {
+        messageId,
+        text: "⚠️ Fault not found.",
+        parse_mode: "HTML",
+        reply_markup: kb([[{ text: "⬅️ Back", callback_data: "autel:menu" }]]),
+      });
+    }
+
+    return renderYamlDecisionNode({ chatId, messageId, fault, nodeId });
   }
 
   // ------------------- REPORT CALLBACKS -------------------
@@ -730,8 +916,7 @@ bot.on("callback_query", async (q) => {
       setReport(chatId, { data: { faultTitle: "AC Contactor Fault" } });
     } else if (data.startsWith("r:fault:AUTEL:")) {
       const id = data.split(":")[3];
-      const autel = loadAutel();
-      const f = (autel.faults || []).find((x) => x.id === id);
+      const f = getAutelFaultById(id);
       setReport(chatId, { data: { faultTitle: f ? f.title : `Autel Fault (${id})` } });
     }
     return askActions(chatId);
@@ -753,7 +938,6 @@ bot.on("callback_query", async (q) => {
 
     setReport(chatId, { data: { actions: Array.from(selected) } });
 
-    // Cleaner UX: edit the existing checklist message if possible
     return upsertMessage(chatId, {
       messageId,
       text: "Step 4/5 — Select <b>actions performed</b>:",
@@ -774,11 +958,14 @@ bot.on("callback_query", async (q) => {
   }
 
   // ------------------- AUTEL / AC -------------------
-  if (data === "autel:menu") return showAutelMenu(chatId, messageId);
+  if (data === "autel:menu") {
+    resetDt(chatId);
+    return showAutelMenu(chatId, messageId);
+  }
 
-  // AC decision tree routing (edit message)
+  // Legacy AC decision tree routing (edit message)
   if (data.startsWith("ac:")) {
-    const key = data.split(":")[1]; // start/observe/noclunk...
+    const key = data.split(":")[1];
     const node = AC[key];
     if (!node) return;
 
@@ -793,10 +980,10 @@ bot.on("callback_query", async (q) => {
   // Autel YAML fault selection (edit message)
   if (data.startsWith("AUTEL:")) {
     const id = data.split(":")[1];
-    const autel = loadAutel();
-    const f = (autel.faults || []).find((x) => x.id === id);
+    const fault = getAutelFaultById(id);
 
-    if (!f) {
+    if (!fault) {
+      resetDt(chatId);
       return upsertMessage(chatId, {
         messageId,
         text: "Fault not found.",
@@ -805,38 +992,7 @@ bot.on("callback_query", async (q) => {
       });
     }
 
-    const lines = [];
-    lines.push(`🧰 <b>${escapeHtml(f.title)}</b>`);
-
-    if (f.symptoms?.length) {
-      lines.push(`\n<b>Symptoms:</b>`);
-      f.symptoms.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
-    }
-    if (f.safety?.length) {
-      lines.push(`\n<b>Safety:</b>`);
-      f.safety.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
-    }
-    if (f.checks?.length) {
-      lines.push(`\n<b>Checks:</b>`);
-      f.checks.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
-    }
-    if (f.actions?.length) {
-      lines.push(`\n<b>Actions:</b>`);
-      f.actions.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
-    }
-    if (f.escalation?.length) {
-      lines.push(`\n<b>Escalation:</b>`);
-      f.escalation.forEach((s) => lines.push(`• ${escapeHtml(String(s))}`));
-    }
-
-    lines.push("\n");
-
-    return upsertMessage(chatId, {
-      messageId,
-      text: lines.join("\n"),
-      parse_mode: "HTML",
-      reply_markup: { inline_keyboard: [[{ text: "⬅️ Back", callback_data: "autel:menu" }]] },
-    });
+    return showAutelFaultCard({ chatId, messageId, fault });
   }
 
   // ignore unknown callback data
@@ -845,7 +1001,6 @@ bot.on("callback_query", async (q) => {
 // ------------------- WEBHOOK ROUTE (Railway) -------------------
 if (useWebhook) {
   app.post(WEBHOOK_PATH, (req, res) => {
-    // Optional: verify secret token header from Telegram
     if (TELEGRAM_WEBHOOK_SECRET) {
       const got = req.get("x-telegram-bot-api-secret-token");
       if (got !== TELEGRAM_WEBHOOK_SECRET) return res.sendStatus(401);

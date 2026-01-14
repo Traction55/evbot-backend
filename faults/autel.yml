@@ -1,47 +1,336 @@
+# autel.yml
+# EVBot Fault: Autel DC - AC Contactor Fault
+# Notes:
+# - Node-based decision tree: start_node + nodes map
+# - Each node has: prompt, actions, options -> next
+# - Keep IDs stable so your bot can deep-link (e.g., /autel ac_contactor_fault)
+
 faults:
-  - id: af_ac_contactor
-    title: "AC Contactor Fault"
-    symptoms:
-      - "Charger won’t start / precharge fails"
-      - "AC contactor fault shown in Autel UI"
+  - id: autel_ac_contactor_fault
+    platform: autel
+    charger_type: dc
+    title: "AC Contactor Fault (Autel DC)"
+    aliases:
+      - "AC Contactor Fault"
+      - "AC contactor error"
+      - "input contactor fault"
+      - "main contactor fault"
+      - "contactor open feedback"
+      - "contactor feedback error"
+    triggers:
+      any_text_contains:
+        - "ac contactor"
+        - "contactor fault"
+        - "contactor feedback"
+        - "input contactor"
+        - "main contactor"
+    severity: high
+    tags:
+      - power
+      - input
+      - contactor
+      - interlock
+      - feedback
+      - three_phase
+
+    response:
+      telegram_markdown: |
+        *Autel DC — AC Contactor Fault*
+        This usually means the charger *can’t close or verify* the main AC input contactor feeding the rectifier stack.
+        
+        *Most common real causes:*
+        • Missing phase / phase imbalance  
+        • Low control PSU voltage (coil undervoltage)  
+        • Loose coil/aux wiring or failed aux feedback contact  
+        • Safety chain / interlock open (E-stop, door, etc.)  
+        • Contactor coil or contacts actually failed
+        
+        Use the decision tree below to isolate whether it’s *supply*, *control*, *feedback*, *interlock*, or *contactor hardware*.
+
     safety:
-      - "LOTO / isolate supply before opening cabinet"
-      - "Verify no voltage present"
-    checks:
-      - "Check incoming AC supply and phase balance"
-      - "Check contactor coil wiring + terminals for heat damage"
-      - "Check control voltage to coil when command is active"
-      - "Inspect for welded contacts / burnt contactor"
-    actions:
-      - "Power cycle and re-test after visual checks"
-      - "If contactor is welded/burnt: replace contactor"
-      - "If no coil command: trace back to control PCB/IO"
-    escalation:
-      - "Collect logs + photos of contactor/terminals"
-      - "Escalate to Autel support with fault ID + findings"
-  - id: dc_contactor_fault
-    title: "DC Contactor Fault"
-    symptoms:
-      - "Precharge fails / contactor fault in UI"
-      - "Charger won’t start or drops out early"
-      - "Intermittent start failures"
-    safety:
-      - "LOTO / isolate supply before opening cabinet"
-      - "Prove dead + wait for DC bus discharge"
-    checks:
-      - "Check contactor coil command voltage during start sequence"
-      - "Inspect contactor for heat damage, pitting, welded contacts"
-      - "Check coil wiring, terminals, and control output from IO"
-      - "Verify auxiliary feedback changes state (NO/NC correct)"
-      - "Check DC bus voltage decay / precharge path components"
-    actions:
-      - "Power cycle and re-test after visual inspection"
-      - "Re-terminate wiring and torque terminations"
-      - "Replace contactor if coil commanded but no pull-in / welded contacts"
-    escalation:
-      - "Send logs + time of event"
-      - "Coil voltage readings + aux state readings"
-      - "Photos of contactor + terminals + any heat marks"
+      telegram_markdown: |
+        *Safety (HV / LV)*
+        • Follow LOTO, prove dead, wait for DC bus discharge.
+        • Treat DC bus as live until verified discharged (wait 2–3 min minimum after isolation).
+        • Only proceed if you’re authorised and competent.
+
+    tools:
+      - "Multimeter (AC V + DC V)"
+      - "Torque driver / insulated tools"
+      - "Thermal camera (optional)"
+      - "Screwdrivers / cabinet keys"
+
+    likely_causes:
+      - "Upstream supply issue (missing phase, blown fuse, isolator OFF)"
+      - "Coil drive missing (control board / wiring / PSU rail)"
+      - "Coil undervoltage (PSU weak, voltage sag)"
+      - "Aux feedback not changing state (aux contact failure / wiring)"
+      - "Safety chain open (E-stop, door interlock, internal safety relay)"
+      - "Contactor failure (coil open, contacts welded/pitted)"
+
+    decision_tree:
+      start_node: A0
+      nodes:
+        A0:
+          prompt: |
+            *AC Contactor Fault — Start*
+            Confirm: Is this fault present *right now* and preventing charging?
+          actions:
+            - "If possible, capture event logs / fault timestamp before clearing."
+            - "Ask: does it clear after a reboot but returns?"
+          options:
+            - label: "Yes, fault active now"
+              next: A1
+            - label: "Intermittent / clears after reboot"
+              next: A2
+
+        A1:
+          prompt: |
+            *Check Site Supply (most common)*
+            Verify upstream power before opening cabinets:
+            • Isolator ON
+            • 3-phase present (L1/L2/L3)
+            • No blown fuses / phase loss
+            • Phase imbalance not excessive
+          actions:
+            - "Measure L-L voltages (e.g., ~400–415VAC) and compare phases."
+            - "Confirm no phase missing at charger input terminals."
+          options:
+            - label: "Supply OK (all phases present)"
+              next: A3
+            - label: "Missing phase / bad supply"
+              next: FIX_SUPPLY
+
+        A2:
+          prompt: |
+            *Intermittent Pattern*
+            If it clears after reboot but returns:
+            • Suspect marginal coil voltage, loose wiring, aux feedback, PSU sag, or heating.
+          actions:
+            - "Proceed through checks in order; don’t replace the contactor first."
+          options:
+            - label: "Continue diagnostics"
+              next: A1
+
+        A3:
+          prompt: |
+            *Perform a Proper Power Cycle*
+            Not just a software reboot:
+            1) AC isolator OFF
+            2) Wait 2–3 minutes (DC bus discharge)
+            3) AC isolator ON
+            Observe startup: do you hear a clean contactor pull-in?
+          actions:
+            - "Listen for a single solid 'clunk' (pull-in)."
+            - "Note any chatter or no actuation."
+          options:
+            - label: "Fault clears and stays cleared"
+              next: MONITOR
+            - label: "No clunk / no pull-in"
+              next: A4
+            - label: "Chatter / weak pull-in"
+              next: A5
+            - label: "Clunks but fault remains"
+              next: A6
+
+        A4:
+          prompt: |
+            *No Pull-in*
+            Likely: coil not being driven OR safety chain open.
+            Next: check interlocks and coil control voltage.
+          actions:
+            - "Check door interlock / E-stop / safety chain state."
+            - "Locate contactor coil terminals and measure coil voltage during pull-in attempt."
+          options:
+            - label: "Safety chain/interlock open"
+              next: FIX_INTERLOCK
+            - label: "Coil voltage absent (0V during attempt)"
+              next: A7
+            - label: "Coil voltage present (normal) but no pull-in"
+              next: REPLACE_CONTACTOR
+
+        A5:
+          prompt: |
+            *Chatter / Weak Pull-in*
+            This is usually undervoltage to coil or a weak PSU rail.
+          actions:
+            - "Measure coil voltage during pull-in (watch for sag)."
+            - "Check control PSU output (commonly 24VDC rail, model dependent)."
+            - "Inspect coil wiring for loose / burnt terminals."
+          options:
+            - label: "Coil/control voltage low or sagging"
+              next: FIX_PSU_OR_SUPPLY
+            - label: "Voltage normal but still chatter"
+              next: REPLACE_CONTACTOR
+
+        A6:
+          prompt: |
+            *Clunks but Fault Persists*
+            Likely: aux feedback not detected or wiring issue.
+          actions:
+            - "Identify aux/feedback contacts wired to controller."
+            - "Check continuity/state change when contactor closes."
+            - "Inspect crimps, plugs, and harness seating."
+          options:
+            - label: "Aux feedback not changing / wiring fault"
+              next: FIX_AUX_FEEDBACK
+            - label: "Aux feedback OK but fault persists"
+              next: A8
+
+        A7:
+          prompt: |
+            *Coil Voltage Absent*
+            If contactor never receives coil drive:
+            • controller not commanding closure
+            • safety chain not satisfied
+            • broken wire / connector
+            • PSU rail missing
+          actions:
+            - "Verify safety chain closed (E-stop, door, internal safety relays)."
+            - "Verify control PSU output rail present and stable."
+            - "Inspect coil drive wiring from controller to contactor."
+          options:
+            - label: "PSU rail missing/unstable"
+              next: FIX_PSU_OR_SUPPLY
+            - label: "Safety chain issue"
+              next: FIX_INTERLOCK
+            - label: "Wiring/connector issue"
+              next: FIX_WIRING
+            - label: "Controller not commanding (needs logs/support)"
+              next: ESCALATE_AUTEL
+
+        A8:
+          prompt: |
+            *Firmware / Configuration Check*
+            If hardware looks OK:
+            • Confirm firmware current
+            • Confirm site voltage/grid config matches (400/415, TN/TT as applicable)
+          actions:
+            - "Update firmware (per Autel process) if not current."
+            - "Verify configuration: site-specific voltage and grid parameters."
+            - "Reboot after changes."
+          options:
+            - label: "Resolved after firmware/config"
+              next: MONITOR
+            - label: "Still faulting"
+              next: ESCALATE_AUTEL
+
+        # ---- Resolution / End Nodes ----
+        FIX_SUPPLY:
+          prompt: |
+            *Fix: Supply Issue*
+            Root cause is upstream power:
+            • Restore missing phase / replace fuse
+            • Fix isolator / upstream breaker
+            Then re-test startup.
+          actions:
+            - "Recheck L-L voltages after repair."
+            - "Power cycle and confirm stable operation."
+          options:
+            - label: "Re-test after supply fix"
+              next: A3
+
+        FIX_INTERLOCK:
+          prompt: |
+            *Fix: Interlock / Safety Chain*
+            Clear E-stop, close doors, confirm interlock loop and safety relays are satisfied.
+          actions:
+            - "Verify interlock inputs in diagnostics if available."
+            - "Fix wiring/microswitch as needed."
+          options:
+            - label: "Re-test after interlock fix"
+              next: A3
+
+        FIX_AUX_FEEDBACK:
+          prompt: |
+            *Fix: Aux Feedback*
+            The controller isn’t seeing the contactor state change.
+          actions:
+            - "Repair/replace aux contact block (if separate) or harness."
+            - "Reseat connectors; re-crimp damaged terminals."
+          options:
+            - label: "Re-test after feedback fix"
+              next: A3
+
+        FIX_PSU_OR_SUPPLY:
+          prompt: |
+            *Fix: Coil/PSU Undervoltage*
+            If coil voltage sags or PSU rail is low:
+            • check control PSU outputs
+            • check for loose/burnt terminals
+            • confirm upstream voltage stability under load
+          actions:
+            - "Measure PSU rail under actuation attempt."
+            - "Inspect for heat damage and high resistance joints."
+          options:
+            - label: "Re-test after PSU/supply work"
+              next: A3
+            - label: "PSU suspected failed (replace/dispatch part)"
+              next: DISPATCH_PSU
+
+        FIX_WIRING:
+          prompt: |
+            *Fix: Wiring/Connector*
+            Repair open-circuit/loose coil drive or feedback wiring.
+          actions:
+            - "Continuity check between controller outputs and coil terminals."
+            - "Reseat/replace connectors, repair damaged loom."
+          options:
+            - label: "Re-test after wiring fix"
+              next: A3
+
+        REPLACE_CONTACTOR:
+          prompt: |
+            *Replace: AC Contactor*
+            Replace if:
+            • coil voltage is present but no pull-in
+            • contacts welded/pitted
+            • persistent chatter with correct voltage
+          actions:
+            - "Torque terminals to spec."
+            - "Verify aux feedback wiring after replacement."
+          options:
+            - label: "Re-test after replacement"
+              next: A3
+
+        DISPATCH_PSU:
+          prompt: |
+            *Action: Dispatch / Replace Control PSU*
+            Based on measurements, the control PSU rail is unstable/low and preventing reliable contactor operation.
+          actions:
+            - "Dispatch PSU or schedule replacement."
+          options:
+            - label: "After PSU replaced, re-test"
+              next: A3
+
+        ESCALATE_AUTEL:
+          prompt: |
+            *Escalate to Autel Support*
+            Provide:
+            • fault timestamp
+            • measured L-L voltages
+            • coil voltage during pull-in attempt
+            • aux feedback state result
+            • interlock status
+            • firmware version + config summary
+          actions:
+            - "Request logs + controller diagnostics guidance."
+          options:
+            - label: "Back to start"
+              next: A0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            Fault cleared. If it reoccurs:
+            • suspect marginal PSU/coil voltage or feedback intermittency
+            • capture logs before clearing next time
+          actions:
+            - "Monitor station and record recurrence conditions (temp/load/time)."
+          options:
+            - label: "Back to start"
+              next: A0
+
 
   - id: insulation_monitor_fault
     title: "Insulation Monitoring / IMD Fault"
