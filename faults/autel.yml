@@ -1,9 +1,9 @@
 # autel.yml
-# EVBot Fault: Autel DC - AC Contactor Fault
+# EVBot Fault Library — Autel DC
 # Notes:
 # - Node-based decision tree: start_node + nodes map
 # - Each node has: prompt, actions, options -> next
-# - Keep IDs stable so your bot can deep-link (e.g., /autel ac_contactor_fault)
+# - Keep IDs stable so your bot can deep-link (e.g., /autel autel_ac_contactor_fault)
 
 faults:
   - id: autel_ac_contactor_fault
@@ -37,14 +37,14 @@ faults:
       telegram_markdown: |
         *Autel DC — AC Contactor Fault*
         This usually means the charger *can’t close or verify* the main AC input contactor feeding the rectifier stack.
-        
+
         *Most common real causes:*
         • Missing phase / phase imbalance  
         • Low control PSU voltage (coil undervoltage)  
         • Loose coil/aux wiring or failed aux feedback contact  
         • Safety chain / interlock open (E-stop, door, etc.)  
         • Contactor coil or contacts actually failed
-        
+
         Use the decision tree below to isolate whether it’s *supply*, *control*, *feedback*, *interlock*, or *contactor hardware*.
 
     safety:
@@ -333,89 +333,444 @@ faults:
 
 
   - id: insulation_monitor_fault
+    platform: autel
+    charger_type: dc
     title: "Insulation Monitoring / IMD Fault"
-    symptoms:
-      - "Insulation fault or IMD alarm"
-      - "Unit will not enable DC output"
-      - "Fault may appear after rain or washdown"
+    severity: high
+    tags:
+      - insulation
+      - imd
+      - leakage
+      - dc_bus
+      - moisture
+
+    response:
+      telegram_markdown: |
+        *Autel DC — Insulation Monitoring (IMD) Fault*
+        The charger has detected **leakage between DC conductors and earth**.
+        This is a *safety-critical* fault and must not be bypassed.
+
     safety:
-      - "LOTO / prove dead"
-      - "Treat as potentially hazardous leakage until proven otherwise"
-    checks:
-      - "Inspect for water ingress in cabinet, base, glands, filters"
-      - "Check DC output cables/connectors for damage or moisture"
-      - "Inspect DC bus bars for tracking/contamination"
-      - "If site safe/approved: insulation test per manufacturer procedure"
-    actions:
-      - "Dry out / clean contamination (only if permitted by procedure)"
-      - "Rectify water ingress pathways and replace damaged seals/glands"
-      - "Re-test after remediation and confirm IMD clears"
-    escalation:
-      - "Provide fault code + timestamp + site weather conditions"
-      - "Photos of suspected ingress points"
-      - "Insulation readings (if taken) and method used"
+      telegram_markdown: |
+        *Safety*
+        • LOTO and prove dead.
+        • Treat as live leakage until confirmed otherwise.
+        • Do NOT megger unless manufacturer procedure allows it.
+
+    decision_tree:
+      start_node: I0
+      nodes:
+        I0:
+          prompt: |
+            *IMD Fault — Start*
+            Is the fault active right now and preventing DC enable?
+          actions:
+            - "Capture fault code, timestamp, and weather conditions."
+          options:
+            - label: "Yes, active now"
+              next: I1
+            - label: "Intermittent / cleared"
+              next: I2
+
+        I1:
+          prompt: |
+            *Visual Moisture Check (Most Common)*
+            Inspect for:
+            • Water ingress
+            • Condensation
+            • Damp cable glands or base
+          actions:
+            - "Inspect cabinet base, filters, glands, DC terminals."
+          options:
+            - label: "Moisture / ingress found"
+              next: FIX_INGRESS
+            - label: "Dry / no visible ingress"
+              next: I3
+
+        I2:
+          prompt: |
+            *Intermittent IMD*
+            Often triggered by humidity, rain, or condensation.
+          actions:
+            - "Ask: did this occur after rain or washdown?"
+          options:
+            - label: "Continue checks"
+              next: I1
+
+        I3:
+          prompt: |
+            *DC Output & Bus Inspection*
+            Check:
+            • DC cables and connectors
+            • Busbars for tracking or contamination
+          actions:
+            - "Look for carbon tracking, residue, damaged insulation."
+          options:
+            - label: "Damage or contamination found"
+              next: FIX_DC_CONTAMINATION
+            - label: "No visible issue"
+              next: I4
+
+        I4:
+          prompt: |
+            *IMD Self-Test / Reset*
+            Perform a full power-down and restart.
+          actions:
+            - "AC isolator OFF → wait discharge → ON."
+          options:
+            - label: "Fault clears"
+              next: MONITOR
+            - label: "Fault returns"
+              next: ESCALATE_IMD
+
+        FIX_INGRESS:
+          prompt: |
+            *Fix: Water Ingress*
+            Root cause is moisture intrusion.
+          actions:
+            - "Dry cabinet (controlled method only)."
+            - "Repair/replace seals, glands, filters."
+          options:
+            - label: "Re-test after drying"
+              next: I4
+
+        FIX_DC_CONTAMINATION:
+          prompt: |
+            *Fix: DC Contamination*
+            Tracking or residue is causing leakage.
+          actions:
+            - "Clean per OEM procedure."
+            - "Replace damaged insulation/components."
+          options:
+            - label: "Re-test after repair"
+              next: I4
+
+        ESCALATE_IMD:
+          prompt: |
+            *Escalate — IMD / Leakage*
+            Provide:
+            • Fault code & timestamp
+            • Weather conditions
+            • Photos of cabinet & DC paths
+          actions:
+            - "Request OEM IMD diagnostics guidance."
+          options:
+            - label: "Back to start"
+              next: I0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            IMD cleared.
+            If it reoccurs, ingress or insulation breakdown is likely.
+          actions:
+            - "Monitor after rain/high humidity."
+          options:
+            - label: "Back to start"
+              next: I0
+
 
   - id: communication_fault_ocpp
+    platform: autel
+    charger_type: dc
     title: "OCPP / Backend Communication Fault"
-    symptoms:
-      - "Offline in backend / OCPP disconnected"
-      - "Charging may still work locally but not remotely"
-      - "Sessions fail to start if backend authorization required"
-    safety:
-      - "No special electrical work unless opening cabinet (then LOTO)"
-    checks:
-      - "Check modem signal strength / registration (SIM active)"
-      - "Verify APN, IP mode, DNS settings (site standard)"
-      - "Confirm OCPP URL and certificates (if applicable)"
-      - "Check time/date correct (TLS can fail if clock wrong)"
-      - "Power cycle modem/control module and re-check status"
-    actions:
-      - "Reboot charger and confirm OCPP reconnect"
-      - "Re-seat comms cables and check router/switch ports if used"
-      - "If persistent: capture logs and network stats"
-    escalation:
-      - "Send logs + OCPP status screenshots"
-      - "SIM ICCID + carrier + signal readings"
-      - "OCPP endpoint details (redact credentials)"
+    severity: medium
+    tags:
+      - ocpp
+      - modem
+      - sim
+      - backend
+      - network
+
+    decision_tree:
+      start_node: C0
+      nodes:
+        C0:
+          prompt: |
+            *OCPP / Backend Fault — Start*
+            Is the charger currently **offline** in the backend?
+          actions:
+            - "Confirm status in backend platform."
+          options:
+            - label: "Yes, offline"
+              next: C1
+            - label: "Online but sessions fail"
+              next: C4
+
+        C1:
+          prompt: |
+            *Check Modem Status*
+            Verify:
+            • SIM present & active
+            • Signal strength
+          actions:
+            - "Check router/modem LEDs or diagnostics."
+          options:
+            - label: "No signal / SIM issue"
+              next: FIX_SIM
+            - label: "Signal OK"
+              next: C2
+
+        C2:
+          prompt: |
+            *Power Cycle Comms*
+            Restart modem/control module.
+          actions:
+            - "Wait up to 10 minutes for OCPP reconnect."
+          options:
+            - label: "Reconnects"
+              next: MONITOR
+            - label: "Still offline"
+              next: C3
+
+        C3:
+          prompt: |
+            *Configuration Check*
+            Verify:
+            • APN
+            • DNS
+            • OCPP URL
+            • Time/date
+          actions:
+            - "Correct any mismatch."
+          options:
+            - label: "Fixed after config"
+              next: MONITOR
+            - label: "Still failing"
+              next: ESCALATE_OCPP
+
+        C4:
+          prompt: |
+            *Authorization Failure*
+            Does RFID/app fail at authorization?
+          actions:
+            - "Test with known-good RFID/app."
+          options:
+            - label: "Auth now works"
+              next: MONITOR
+            - label: "Still failing"
+              next: ESCALATE_OCPP
+
+        FIX_SIM:
+          prompt: |
+            *Fix: SIM / Signal*
+            Root cause is connectivity.
+          actions:
+            - "Check antenna, SIM status, carrier coverage."
+          options:
+            - label: "Re-test after fix"
+              next: C2
+
+        ESCALATE_OCPP:
+          prompt: |
+            *Escalate — Backend/OCPP*
+            Provide:
+            • Logs
+            • SIM ICCID & carrier
+            • OCPP status screenshots
+          actions:
+            - "Raise to network/OEM support."
+          options:
+            - label: "Back to start"
+              next: C0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            OCPP stable.
+          actions:
+            - "Confirm stable heartbeat over time."
+          options:
+            - label: "Back to start"
+              next: C0
+
 
   - id: emergency_stop_active
+    platform: autel
+    charger_type: dc
     title: "E-Stop / Interlock Active"
-    symptoms:
-      - "Unit won’t start, interlock/E-stop shown"
-      - "Contactors will not energize"
-    safety:
-      - "Do not bypass safety circuits"
-      - "If opening cabinet: LOTO + prove dead"
-    checks:
-      - "Confirm all E-stops released (including remote pedestals if any)"
-      - "Check door interlock switch alignment and wiring"
-      - "Check safety loop continuity (where accessible/allowed)"
-      - "Inspect for broken wiring, loose terminals, damaged switch"
-    actions:
-      - "Reset E-stop correctly and confirm UI clears"
-      - "Repair/replace faulty interlock device if identified"
-    escalation:
-      - "Provide fault screenshot + which interlock indicated"
-      - "Photos of interlock device and wiring terminations"
+    severity: high
+    tags:
+      - safety
+      - interlock
+      - estop
+
+    decision_tree:
+      start_node: E0
+      nodes:
+        E0:
+          prompt: |
+            *E-Stop / Interlock Fault — Start*
+            Is the charger preventing startup due to safety?
+          actions:
+            - "Identify which interlock is indicated."
+          options:
+            - label: "Yes"
+              next: E1
+
+        E1:
+          prompt: |
+            *Check All E-Stops*
+            Including:
+            • Charger
+            • Remote pedestals
+          actions:
+            - "Twist/pull to reset fully."
+          options:
+            - label: "E-Stop was engaged"
+              next: FIX_ESTOP
+            - label: "All released"
+              next: E2
+
+        E2:
+          prompt: |
+            *Door / Panel Interlocks*
+            Confirm all doors closed and aligned.
+          actions:
+            - "Inspect microswitches and wiring."
+          options:
+            - label: "Door/interlock fault found"
+              next: FIX_INTERLOCK
+            - label: "No issue found"
+              next: ESCALATE_INTERLOCK
+
+        FIX_ESTOP:
+          prompt: |
+            *Fix: E-Stop*
+            Reset restored safety loop.
+          actions:
+            - "Confirm UI clears and contactors enable."
+          options:
+            - label: "Re-test"
+              next: MONITOR
+
+        FIX_INTERLOCK:
+          prompt: |
+            *Fix: Door Interlock*
+            Repair or adjust faulty interlock.
+          actions:
+            - "Replace damaged switch or wiring."
+          options:
+            - label: "Re-test"
+              next: MONITOR
+
+        ESCALATE_INTERLOCK:
+          prompt: |
+            *Escalate — Safety Loop*
+            Possible internal safety relay or wiring fault.
+          actions:
+            - "Provide fault screen + photos."
+          options:
+            - label: "Back to start"
+              next: E0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            Safety fault cleared.
+          actions:
+            - "Ensure no recurrence."
+          options:
+            - label: "Back to start"
+              next: E0
+
 
   - id: cooling_fan_fault_overtemp
-    title: "Cooling / Fan Fault (Overtemp Risk)"
-    symptoms:
-      - "Fans not running / noisy / airflow hot"
-      - "Derates or overheats under load"
-      - "Overtemp or thermal warning"
-    safety:
-      - "LOTO before opening cabinet"
-      - "Beware hot surfaces"
-    checks:
-      - "Check filters for blockage and replace if dirty"
-      - "Verify fans spin freely and are powered when commanded"
-      - "Inspect ducts and heatsinks for blockage/dust"
-      - "Check temperature sensor readings if available"
-    actions:
-      - "Clean/replace filters, clear airflow paths"
-      - "Replace failed fan assembly if not operating"
-      - "Re-test under load and monitor temps"
-    escalation:
-      - "Send logs + temp readings + time of fault"
-      - "Photos of filters/fans/heatsinks"
+    platform: autel
+    charger_type: dc
+    title: "Cooling / Fan Fault (Overtemperature Risk)"
+    severity: medium
+    tags:
+      - cooling
+      - fan
+      - thermal
+      - overtemp
+
+    decision_tree:
+      start_node: T0
+      nodes:
+        T0:
+          prompt: |
+            *Cooling / Overtemp Fault — Start*
+            Has the charger derated or stopped due to temperature?
+          actions:
+            - "Note ambient temperature and load."
+          options:
+            - label: "Yes"
+              next: T1
+
+        T1:
+          prompt: |
+            *Filter Check (Most Common)*
+            Are filters blocked or dirty?
+          actions:
+            - "Inspect intake and exhaust filters."
+          options:
+            - label: "Dirty/blocked"
+              next: FIX_FILTERS
+            - label: "Clean"
+              next: T2
+
+        T2:
+          prompt: |
+            *Fan Operation*
+            Do fans run when commanded?
+          actions:
+            - "Listen and visually confirm airflow."
+          options:
+            - label: "Fan not running / noisy"
+              next: FIX_FAN
+            - label: "Fans OK"
+              next: T3
+
+        T3:
+          prompt: |
+            *Thermal Re-Test*
+            Run controlled load after cooldown.
+          actions:
+            - "Monitor temps and derating."
+          options:
+            - label: "No fault"
+              next: MONITOR
+            - label: "Fault returns"
+              next: ESCALATE_THERMAL
+
+        FIX_FILTERS:
+          prompt: |
+            *Fix: Filters*
+            Restricted airflow caused overheating.
+          actions:
+            - "Clean or replace filters."
+          options:
+            - label: "Re-test"
+              next: T3
+
+        FIX_FAN:
+          prompt: |
+            *Fix: Fan*
+            Cooling fan failed or degraded.
+          actions:
+            - "Replace fan assembly."
+          options:
+            - label: "Re-test"
+              next: T3
+
+        ESCALATE_THERMAL:
+          prompt: |
+            *Escalate — Thermal*
+            Possible sensor or internal cooling fault.
+          actions:
+            - "Send logs, temps, photos."
+          options:
+            - label: "Back to start"
+              next: T0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            Cooling operating normally.
+          actions:
+            - "Recommend filter maintenance interval."
+          options:
+            - label: "Back to start"
+              next: T0

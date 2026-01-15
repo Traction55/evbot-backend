@@ -763,7 +763,7 @@ function buildAutelMenuKeyboard() {
   const data = loadAutel();
   const faults = data.faults || [];
 
-  const rows = [[{ text: "🧰 AC Contactor Fault (Legacy Tree)", callback_data: "ac:start" }]];
+  const rows = [];
 
   if (!faults.length) {
     rows.push([{ text: "⚠️ No Autel faults loaded (check /debug/autel)", callback_data: "noop" }]);
@@ -775,8 +775,10 @@ function buildAutelMenuKeyboard() {
 
   rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
   rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
+
   return rows;
 }
+
 
 async function showAutelMenu(chatId, messageId) {
   const rows = buildAutelMenuKeyboard();
