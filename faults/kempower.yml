@@ -1,8 +1,8 @@
 # kempower.yml
-# EVBot Fault Pack: Kempower (On-site Technician v1)
+# EVBot Fault Pack: Kempower (On-site Technician v1) — Descriptive Merge (nodes-based)
 # Notes:
 # - Node-based decision tree: start_node + nodes map
-# - Each node has: prompt, options -> next
+# - Each node has: prompt, options -> next (actions optional)
 # - Keep IDs stable for deep links
 
 faults:
@@ -13,6 +13,26 @@ faults:
     title: "Power Module Fault / Module Offline (Kempower)"
     severity: high
     tags: [power_module, rectifier, dc_bus, comms, cooling]
+
+    description: >
+      One or more power modules are offline/not enabled/not communicating.
+      Most common field fix is reseating after making safe. If the fault follows the module when swapped,
+      it suggests a failed module. If it stays with the slot/system, suspect backplane/comms/controller/cooling.
+
+    likely_causes:
+      - Module not seated correctly (most common)
+      - Backplane/comms connection issue at slot
+      - Cooling-related shutdown (filters/fans/airflow)
+      - Failed module (less common)
+
+    safety_notes:
+      - LOTO before cabinet access; wait minimum 5 minutes for DC bus discharge
+      - Verify safe state before handling modules
+
+    tools_required:
+      - Multimeter (HV verification)
+      - Insulated hand tools
+      - Torch / inspection light
 
     response:
       telegram_markdown: |
@@ -34,7 +54,9 @@ faults:
       nodes:
 
         P0:
-          prompt: "*Power Module Fault — Start*"
+          prompt: |
+            *Power Module Fault — Start*
+            Confirm the fault is active (or intermittent) and proceed with safe isolation first.
           options:
             - label: "Module offline / fault active"
               next: P1
@@ -42,7 +64,9 @@ faults:
               next: P1
 
         P1:
-          prompt: "*Make safe (LOTO)*"
+          prompt: |
+            *Make safe (LOTO)*
+            Isolate and confirm safe state before opening cabinet or handling modules.
           options:
             - label: "Isolated & safe"
               next: P2
@@ -50,7 +74,9 @@ faults:
               next: STOP_ESCALATE
 
         P2:
-          prompt: "*Visual inspection*"
+          prompt: |
+            *Visual inspection*
+            Look for damage/overheating/water ingress or loose debris. If found — stop and escalate.
           options:
             - label: "Damage / ingress visible"
               next: STOP_DAMAGE
@@ -58,7 +84,9 @@ faults:
               next: P3
 
         P3:
-          prompt: "*Reseat module (most common fix)*"
+          prompt: |
+            *Reseat module (most common fix)*
+            Reseat the affected module to rule out poor seating/connection.
           options:
             - label: "Reseated"
               next: P4
@@ -66,7 +94,9 @@ faults:
               next: ESCALATE_PACK
 
         P4:
-          prompt: "*Restore power & re-check*"
+          prompt: |
+            *Restore power & re-check*
+            Restore power, allow boot, and confirm whether the module returns online.
           options:
             - label: "Module online"
               next: RESOLVED_MONITOR
@@ -74,7 +104,9 @@ faults:
               next: P5
 
         P5:
-          prompt: "*Does the fault follow the module?*"
+          prompt: |
+            *Does the fault follow the module?*
+            If permitted, swap modules to see whether the fault follows the module or stays with the slot/system.
           options:
             - label: "Yes — follows module"
               next: REPLACE_MODULE
@@ -84,7 +116,9 @@ faults:
               next: ESCALATE_PACK
 
         REPLACE_MODULE:
-          prompt: "*Suspected failed module*"
+          prompt: |
+            *Suspected failed module*
+            Fault follows the module — likely defective. Escalate for replacement handling.
           options:
             - label: "Escalate for replacement"
               next: ESCALATE_PACK
@@ -92,7 +126,9 @@ faults:
               next: MENU_KEMPOWER
 
         STOP_DAMAGE:
-          prompt: "*STOP — Damage / overheating found*"
+          prompt: |
+            *STOP — Damage / overheating found*
+            Do not proceed. Escalate with photos and findings.
           options:
             - label: "Escalate"
               next: ESCALATE_PACK
@@ -100,7 +136,9 @@ faults:
               next: MENU_KEMPOWER
 
         STOP_ESCALATE:
-          prompt: "*STOP — Unable to isolate safely*"
+          prompt: |
+            *STOP — Unable to isolate safely*
+            Do not proceed if you can’t confirm safe state. Escalate.
           options:
             - label: "Escalate"
               next: ESCALATE_PACK
@@ -108,13 +146,18 @@ faults:
               next: MENU_KEMPOWER
 
         ESCALATE_PACK:
-          prompt: "*Escalation pack — Power Module*"
+          prompt: |
+            *Escalation pack — Power Module*
+            Include: module slot/ID, reseat result, swap test outcome (if done),
+            LEDs/error codes, photos, and timestamps.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: "*Resolved — monitor*"
+          prompt: |
+            *Resolved — monitor*
+            Run a test session and monitor for recurrence.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
@@ -135,6 +178,30 @@ faults:
     severity: high
     tags: [ocpp, backend, comms, modem, sim, network]
 
+    description: >
+      The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
+      If basic antenna/SIM checks don’t reveal anything, proceed to deeper network causes such as APN issues,
+      carrier outage/throttling, private IP/firewall blocks, and DNS/time sync problems.
+
+    likely_causes:
+      - Modem/SIM not registered on packet data (provisioning issue)
+      - Poor signal / damaged antenna / antenna connection loose
+      - Incorrect APN settings
+      - Carrier outage or throttling
+      - Backend firewall/whitelist blocking private IP ranges
+      - DNS or time sync issues affecting TLS/OCPP handshake
+
+    safety_notes:
+      - Many comms checks can be done without opening HV compartments
+      - Follow ESD precautions if accessing comms hardware
+      - Comply with site rules when using hotspots or changing SIMs
+
+    tools_required:
+      - Known-good SIM (optional)
+      - Access to APN details and backend endpoint requirements
+      - Phone/laptop for hotspot test (if permitted)
+      - Basic hand tools (if comms compartment access required)
+
     response:
       telegram_markdown: |
         *Kempower — Backend / OCPP Communication Fault*
@@ -152,13 +219,17 @@ faults:
       nodes:
 
         C0:
-          prompt: "*Backend / OCPP offline*"
+          prompt: >
+            *Backend / OCPP offline*
+            Confirm offline state and proceed with basic recovery steps first.
           options:
             - label: "Continue"
               next: C1
 
         C1:
-          prompt: "*Reboot / power cycle*"
+          prompt: >
+            *Reboot / power cycle*
+            Reboot and allow time for modem registration and backend handshake.
           options:
             - label: "Online"
               next: RESOLVED_MONITOR
@@ -166,7 +237,10 @@ faults:
               next: C2
 
         C2:
-          prompt: "*Basic antenna / SIM checks*"
+          prompt: >
+            *Basic antenna / SIM checks*
+            Inspect antenna condition/connection and confirm SIM is seated and serviceable.
+            If no obvious issue is found, proceed to deeper network checks.
           options:
             - label: "Issue found"
               next: C1
@@ -188,13 +262,18 @@ faults:
               next: ESCALATE_PACK
 
         ESCALATE_PACK:
-          prompt: "*Escalation pack — Backend/OCPP*"
+          prompt: >
+            *Escalation pack — Backend/OCPP*
+            Provide: last known online time, signal strength (if available),
+            SIM/APN checks performed, and any comms-related logs/time stamps.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: "*Resolved — monitor*"
+          prompt: >
+            *Resolved — monitor*
+            Confirm stable backend connection and monitor for dropouts.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
@@ -213,18 +292,43 @@ faults:
     severity: high
     tags: [safety, interlock, estop]
 
+    description: >
+      An E-stop or safety interlock is active, preventing operation.
+      Start by checking all E-stops (including any remote or pedestal E-stops) and then verify doors/interlocks.
+      If nothing obvious is found, escalate with details of what was checked and any status indicators.
+
+    likely_causes:
+      - Local or remote E-stop engaged (including at dispensers/pedestals)
+      - Door interlock open or misaligned
+      - Safety loop wiring fault
+      - Interlock input fault / controller interpretation issue
+
+    safety_notes:
+      - Treat any active safety chain as a stop condition until verified
+      - Follow site safety rules; do not bypass safety devices
+      - If cabinet access is required, follow LOTO requirements
+
+    tools_required:
+      - Inspection light
+      - Basic hand tools for access panels (if required)
+      - Multimeter (optional, for continuity checks if authorised)
+
     decision_tree:
       start_node: S0
       nodes:
 
         S0:
-          prompt: "*E-Stop / Interlock active*"
+          prompt: >
+            *E-Stop / Interlock active*
+            Start with E-stop checks. Confirm all E-stops are released/reset.
           options:
             - label: "Check E-Stops"
               next: S1
 
         S1:
-          prompt: "*Any E-Stop engaged?*"
+          prompt: >
+            *Any E-Stop engaged?*
+            Confirm all E-stops (including any remote/pedestal) are reset.
           options:
             - label: "Yes"
               next: RESOLVED_TEST
@@ -232,7 +336,10 @@ faults:
               next: S2
 
         S2:
-          prompt: "*Check doors / interlocks*"
+          prompt: >
+            *Check doors / interlocks*
+            Check door latches/interlock switches for alignment and proper closure.
+            Look for damaged actuators or loose wiring at the interlock switch.
           options:
             - label: "Issue found"
               next: RESOLVED_TEST
@@ -240,13 +347,17 @@ faults:
               next: ESCALATE_PACK
 
         RESOLVED_TEST:
-          prompt: "*Resolved — test charger*"
+          prompt: >
+            *Resolved — test charger*
+            Clear the interlock condition and perform a functional test to confirm normal operation.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         ESCALATE_PACK:
-          prompt: "*Escalation pack — Interlock*"
+          prompt: >
+            *Escalation pack — Interlock*
+            Provide: which E-stops checked, door/interlock findings, and any status indicators/logs/time stamps.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
@@ -265,18 +376,44 @@ faults:
     severity: critical
     tags: [imd, insulation, earth_leakage, safety]
 
+    description: >
+      Insulation Monitoring Device (IMD) fault indicates potential insulation breakdown between HV conductors
+      and earth. Common field triggers include moisture ingress in connectors/cables, damaged insulation,
+      contamination, or internal component faults. Treat this as a high-risk safety condition.
+
+    likely_causes:
+      - Moisture/water ingress in the connector or cable head
+      - Damaged DC cable insulation or crushed conductors
+      - Contamination (conductive dirt/salt) causing leakage paths
+      - Internal insulation breakdown within charger components
+
+    safety_notes:
+      - Do not continue charging if insulation risk is suspected
+      - Follow LOTO before inspecting cables/connectors
+      - Do not bypass safety protections; escalate if not clearly resolved
+      - If moisture/ingress is present, treat as STOP condition
+
+    tools_required:
+      - Inspection light
+      - Basic hand tools (if access required)
+      - Megger/insulation tester (only if authorised and procedure allows)
+
     decision_tree:
       start_node: I0
       nodes:
 
         I0:
-          prompt: "*IMD / insulation fault detected*"
+          prompt: >
+            *IMD / insulation fault detected*
+            Begin with cable/connector inspection for moisture or damage.
           options:
             - label: "Inspect connector/cable"
               next: I1
 
         I1:
-          prompt: "*Moisture or damage present?*"
+          prompt: >
+            *Moisture or damage present?*
+            If any damage/ingress is found, STOP and escalate—this is a safety-critical condition.
           options:
             - label: "Yes"
               next: STOP_DAMAGE
@@ -284,7 +421,9 @@ faults:
               next: I2
 
         I2:
-          prompt: "*Reboot & re-test*"
+          prompt: >
+            *Reboot & re-test*
+            After confirming no visible damage/ingress, reboot and re-test to confirm whether the fault clears.
           options:
             - label: "Cleared"
               next: RESOLVED_MONITOR
@@ -292,7 +431,9 @@ faults:
               next: ESCALATE_PACK
 
         STOP_DAMAGE:
-          prompt: "*STOP — insulation risk*"
+          prompt: >
+            *STOP — insulation risk*
+            Do not proceed. Escalate with photos of cable/connector and any environmental conditions.
           options:
             - label: "Escalate"
               next: ESCALATE_PACK
@@ -300,13 +441,18 @@ faults:
               next: MENU_KEMPOWER
 
         ESCALATE_PACK:
-          prompt: "*Escalation pack — IMD*"
+          prompt: >
+            *Escalation pack — IMD*
+            Provide: photos of connector/cable, moisture/contamination observations, site conditions (rain, wash-down),
+            and event logs/time stamps.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: "*Resolved — monitor closely*"
+          prompt: >
+            *Resolved — monitor closely*
+            Run a test session and monitor closely for recurrence. If it returns, escalate.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
@@ -325,18 +471,43 @@ faults:
     severity: high
     tags: [cooling, fans, filters, airflow]
 
+    description: >
+      Overtemperature or cooling fault indicates the charger is exceeding thermal limits or has detected
+      inadequate airflow. The most common field cause is blocked filters/vents. Fan failures and poor cabinet
+      ventilation can also trigger this fault, especially in hot ambient conditions.
+
+    likely_causes:
+      - Dirty filters or blocked vents restricting airflow
+      - Failed/obstructed fans
+      - Poor ventilation around cabinet (recirculation)
+      - High ambient temperature / direct sun load
+
+    safety_notes:
+      - Start with external airflow/filter checks where possible
+      - Follow LOTO requirements for any internal fan inspection or access
+      - Avoid operating the unit under load until cooling is confirmed normal
+
+    tools_required:
+      - Inspection light
+      - Basic hand tools for filter access panels (if required)
+      - IR thermometer (optional)
+
     decision_tree:
       start_node: T0
       nodes:
 
         T0:
-          prompt: "*Overtemperature / cooling fault*"
+          prompt: >
+            *Overtemperature / cooling fault*
+            Start with airflow checks and filter condition. This is the most common field cause.
           options:
             - label: "Check airflow"
               next: T1
 
         T1:
-          prompt: "*Filters dirty / vents blocked?*"
+          prompt: >
+            *Filters dirty / vents blocked?*
+            Inspect filters and vents for dust buildup and blockage.
           options:
             - label: "Yes"
               next: FIX_FILTERS
@@ -344,19 +515,25 @@ faults:
               next: ESCALATE_PACK
 
         FIX_FILTERS:
-          prompt: "*Clean filters & vents*"
+          prompt: >
+            *Clean filters & vents*
+            Clean/replace filters and clear vents, then re-test under load.
           options:
             - label: "Re-test"
               next: RESOLVED_MONITOR
 
         ESCALATE_PACK:
-          prompt: "*Escalation pack — Cooling*"
+          prompt: >
+            *Escalation pack — Cooling*
+            Escalate with ambient conditions, fan operation observations, and any temperature readings/logs.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: "*Resolved — monitor*"
+          prompt: >
+            *Resolved — monitor*
+            Confirm temperatures stabilise within normal range during a test session.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
