@@ -5,7 +5,12 @@
  * - Autel faults (YAML) + YAML decision_tree
  * - Kempower faults (YAML) + YAML decision_tree
  * - /report generates a client-ready service report
- * - Legacy hard-coded AC decision tree (ac:*) still available (NOT used in /report)
+ *
+ * New additions (Jan 2026):
+ * - "Create report for this fault" from any fault card (autofills manufacturer + fault)
+ * - Removed visible "evidence captured" checklist (per request)
+ * - Added optional "Upload photos" step (silent capture, referenced as attachments count)
+ * - Report fields: Site name, Asset ID, Tech name, Client reference / ticket #
  *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
@@ -180,6 +185,11 @@ function kb(rows) {
   return { inline_keyboard: rows };
 }
 
+function cap(s) {
+  const v = String(s || "");
+  return v ? v.charAt(0).toUpperCase() + v.slice(1) : "";
+}
+
 // Edit message if possible (clean UX), else send a new one
 async function upsertMessage(chatId, opts) {
   const { text, parse_mode, reply_markup, messageId } = opts;
@@ -285,10 +295,17 @@ function buildLegacyFaultHtml(f) {
   return lines.join("\n");
 }
 
+// Callback helpers for starting report from a fault
+function reportFromFaultCallback(pack, faultId) {
+  return `RF|${pack}|${faultId}`;
+}
+
 async function showFaultCard({ chatId, messageId, pack, fault }) {
   resetDt(chatId);
 
   const rows = [];
+
+  // Start DT (if present)
   if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
     rows.push([
       {
@@ -298,6 +315,15 @@ async function showFaultCard({ chatId, messageId, pack, fault }) {
     ]);
   }
 
+  // Report from this fault (autofill)
+  rows.push([
+    {
+      text: "🧾 Create report for this fault",
+      callback_data: reportFromFaultCallback(pack, fault.id),
+    },
+  ]);
+
+  // Back to menu
   rows.push([{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }]);
 
   // Preferred: YAML field response.telegram_markdown
@@ -343,9 +369,13 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
 
   const text = node.prompt || "…";
 
+  // 1 button per row
   const rows = (node.options || []).map((opt) => [
     { text: opt.label, callback_data: dtCallback(pack, fault.id, opt.next) },
   ]);
+
+  // Report from within the tree too
+  rows.push([{ text: "🧾 Create report for this fault", callback_data: reportFromFaultCallback(pack, fault.id) }]);
 
   rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(pack, fault.id) }]);
   rows.push([
@@ -365,12 +395,32 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
 
 // ------------------- /report WIZARD -------------------
 function setReport(chatId, patch) {
-  const cur = reportState.get(chatId) || { step: "site", data: { actions: [] } };
+  const cur =
+    reportState.get(chatId) || {
+      step: "site",
+      data: {
+        actions: [],
+        manufacturer: "",
+        faultTitle: "",
+        prefilled: false,
+
+        // NEW report fields
+        assetId: "",
+        technician: "",
+        clientRef: "",
+
+        // NEW: optional photos (silent capture)
+        photos: [],
+        notes: "",
+      },
+    };
+
   const next = {
     ...cur,
     ...patch,
     data: { ...cur.data, ...(patch.data || {}) },
   };
+
   reportState.set(chatId, next);
   return next;
 }
@@ -379,9 +429,12 @@ function clearReport(chatId) {
   reportState.delete(chatId);
 }
 
-function formatReport(data) {
+function formatReportHtml(data) {
   const site = escapeHtml(data.site || "");
-  const chargerId = escapeHtml(data.chargerId || "");
+  const assetId = escapeHtml(data.assetId || "");
+  const technician = escapeHtml(data.technician || "");
+  const clientRef = escapeHtml(data.clientRef || "");
+
   const manufacturer = escapeHtml((data.manufacturer || "").toUpperCase());
   const faultTitle = escapeHtml(data.faultTitle || "");
   const resolution = escapeHtml(data.resolution || "");
@@ -390,32 +443,84 @@ function formatReport(data) {
   const actions = Array.isArray(data.actions) ? data.actions : [];
   const actionsLines = actions.length ? actions.map((a) => `• ${escapeHtml(a)}`).join("\n") : "• (none recorded)";
 
+  const photos = Array.isArray(data.photos) ? data.photos : [];
+  const attachmentsLine = photos.length ? `• Photos uploaded (${photos.length})` : "• None";
+
   return (
     `🧾 <b>EVBot Service Report</b>\n\n` +
     `<b>Site:</b> ${site}\n` +
-    `<b>Charger:</b> ${chargerId}\n` +
+    `<b>Asset ID:</b> ${assetId}\n` +
+    `<b>Technician:</b> ${technician}\n` +
+    `<b>Client reference / ticket #:</b> ${clientRef}\n` +
     (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
     `<b>Fault:</b> ${faultTitle}\n\n` +
-    `<b>Actions completed:</b>\n${actionsLines}\n\n` +
-    `<b>Status / Outcome:</b> ${resolution}\n` +
+    `<b>Actions Taken:</b>\n${actionsLines}\n\n` +
+    `<b>Status / Outcome:</b> ${resolution}\n\n` +
+    `<b>Attachments:</b>\n${attachmentsLine}\n` +
     (notes ? `\n<b>Notes:</b>\n${notes}\n` : "")
   );
 }
 
 async function startReport(chatId) {
-  setReport(chatId, { step: "site", data: { actions: [], manufacturer: "", faultTitle: "" } });
+  setReport(chatId, {
+    step: "site",
+    data: {
+      actions: [],
+      manufacturer: "",
+      faultTitle: "",
+      prefilled: false,
+      assetId: "",
+      technician: "",
+      clientRef: "",
+      photos: [],
+      notes: "",
+    },
+  });
+
+  return bot.sendMessage(chatId, "🧾 <b>Report Builder</b>\n\nWhat is the <b>site name</b>?\n\n(Reply with text)", {
+    parse_mode: "HTML",
+  });
+}
+
+// Start report with manufacturer+fault prefilled
+async function startReportFromFault(chatId, pack, fault) {
+  setReport(chatId, {
+    step: "site",
+    data: {
+      actions: [],
+      manufacturer: pack,
+      faultTitle: fault?.title || "",
+      prefilled: true,
+      assetId: "",
+      technician: "",
+      clientRef: "",
+      photos: [],
+      notes: "",
+    },
+  });
 
   return bot.sendMessage(
     chatId,
-    "🧾 <b>Report Builder</b>\n\nStep 1/6 — What is the <b>site name</b>?\n\n(Reply with text)",
+    `🧾 <b>Report Builder</b>\n\nPrefilled:\n<b>Manufacturer:</b> ${escapeHtml(cap(pack))}\n<b>Fault:</b> ${escapeHtml(
+      fault?.title || ""
+    )}\n\nWhat is the <b>site name</b>?\n\n(Reply with text)`,
     { parse_mode: "HTML" }
   );
 }
 
-async function askCharger(chatId) {
-  setReport(chatId, { step: "charger" });
+async function askAssetId(chatId) {
+  setReport(chatId, { step: "assetId" });
+  return bot.sendMessage(chatId, "What is the <b>asset ID</b>?\n\n(Reply with text)", { parse_mode: "HTML" });
+}
 
-  return bot.sendMessage(chatId, "Step 2/6 — What is the <b>charger ID / asset ID</b>?\n\n(Reply with text)", {
+async function askTechnician(chatId) {
+  setReport(chatId, { step: "technician" });
+  return bot.sendMessage(chatId, "What is the <b>technician name</b>?\n\n(Reply with text)", { parse_mode: "HTML" });
+}
+
+async function askClientRef(chatId) {
+  setReport(chatId, { step: "clientRef" });
+  return bot.sendMessage(chatId, "What is the <b>client reference / ticket #</b>?\n\n(Reply with text)", {
     parse_mode: "HTML",
   });
 }
@@ -429,7 +534,7 @@ async function askReportManufacturer(chatId) {
     [{ text: "Cancel", callback_data: "r:cancel" }],
   ];
 
-  return bot.sendMessage(chatId, "Step 3/6 — Select the <b>manufacturer</b>:", {
+  return bot.sendMessage(chatId, "Select the <b>manufacturer</b>:", {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
@@ -463,7 +568,7 @@ async function askFault(chatId) {
   rows.push([{ text: "⬅️ Back", callback_data: "r:back:mfr" }]);
   rows.push([{ text: "Cancel", callback_data: "r:cancel" }]);
 
-  return bot.sendMessage(chatId, `Step 4/6 — Select the <b>${isKp ? "Kempower" : "Autel"} fault</b>:`, {
+  return bot.sendMessage(chatId, `Select the <b>${isKp ? "Kempower" : "Autel"} fault</b>:`, {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
@@ -501,7 +606,10 @@ async function askActions(chatId) {
   const st = reportState.get(chatId);
   const selected = st?.data?.actions || [];
 
-  return bot.sendMessage(chatId, "Step 5/6 — Select <b>actions performed</b>:", {
+  const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
+  const mfr = st?.data?.manufacturer ? `\n<b>Manufacturer:</b> ${escapeHtml(cap(st.data.manufacturer))}` : "";
+
+  return bot.sendMessage(chatId, `Select <b>actions performed</b>:${mfr}${title}`, {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: buildActionsKeyboard(selected) },
   });
@@ -518,10 +626,29 @@ async function askResolution(chatId) {
     [{ text: "Cancel", callback_data: "r:cancel" }],
   ];
 
-  return bot.sendMessage(chatId, "Step 6/6 — Select <b>status/outcome</b>:", {
+  return bot.sendMessage(chatId, "Select <b>status/outcome</b>:", {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
+}
+
+async function askUploadPhotos(chatId) {
+  setReport(chatId, { step: "UPLOAD_PHOTOS" });
+
+  return bot.sendMessage(
+    chatId,
+    "📸 <b>Upload photos (optional)</b>\n\nRecommended:\n• Fault screen / alarm\n• Internal condition (if opened)\n• Filters, connectors, modules\n• Before / after photos\n\nYou can upload multiple photos.\nTap <b>Done uploading</b> when finished, or <b>Skip</b> to continue.",
+    {
+      parse_mode: "HTML",
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "Skip", callback_data: "PHOTOS_SKIP" }],
+          [{ text: "Done uploading", callback_data: "PHOTOS_DONE" }],
+          [{ text: "Cancel", callback_data: "r:cancel" }],
+        ],
+      },
+    }
+  );
 }
 
 async function askNotes(chatId) {
@@ -542,7 +669,7 @@ async function finishReport(chatId) {
   const st = reportState.get(chatId);
   const data = st?.data || {};
 
-  const reportText = formatReport(data);
+  const reportText = formatReportHtml(data);
 
   setReport(chatId, { step: "done" });
 
@@ -556,36 +683,6 @@ async function finishReport(chatId) {
     },
   });
 }
-
-// ------------------- LEGACY AC CONTACTOR DECISION TREE (kept) -------------------
-const AC = {
-  start: {
-    text:
-      "🧰 <b>AC Contactor Fault</b>\n\n" +
-      "<b>Step 1 — Safety</b>\n" +
-      "• LOTO / isolate supply\n" +
-      "• Prove dead before touching\n" +
-      "• Verify no voltage present\n\n" +
-      "Tap <b>Next</b> when safe.",
-    buttons: kb([
-      [{ text: "Next ➡️", callback_data: "ac:observe" }],
-      [{ text: "⬅️ Back", callback_data: "autel:menu" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  observe: {
-    text: "🔎 <b>What do you observe?</b>\n\nChoose the closest match:",
-    buttons: kb([
-      [{ text: "No clunk (no pull-in)", callback_data: "ac:noclunk" }],
-      [{ text: "Clunks but fault remains", callback_data: "ac:clunkfault" }],
-      [{ text: "Intermittent / works after reboot", callback_data: "ac:intermittent" }],
-      [{ text: "Not sure", callback_data: "ac:not_sure" }],
-      [{ text: "⬅️ Back", callback_data: "ac:start" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  // ... (UNCHANGED: keep the rest of your AC object exactly as it already is)
-};
 
 // ------------------- MENUS -------------------
 function showManufacturerMenu(chatId, messageId) {
@@ -650,6 +747,7 @@ function buildKempowerMenuKeyboard() {
     });
   }
 
+  rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
   rows.push([{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }]);
   rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
 
@@ -678,6 +776,14 @@ bot.onText(/^\/ping$/, async (msg) => {
   await bot.sendMessage(msg.chat.id, "✅ pong");
 });
 
+bot.onText(/^\/reset$/, async (msg) => {
+  const chatId = msg.chat.id;
+  clearReport(chatId);
+  resetDt(chatId);
+  await showManufacturerMenu(chatId);
+  await bot.sendMessage(chatId, "🔄 Reset complete.");
+});
+
 bot.onText(/^\/autel$/, async (msg) => {
   resetDt(msg.chat.id);
   await showAutelMenu(msg.chat.id);
@@ -704,6 +810,9 @@ bot.on("message", async (msg) => {
   const text = (msg?.text || "").trim();
   if (!chatId) return;
 
+  // If it's a photo message, photo handler below will deal with it
+  if (!text) return;
+
   if (text.startsWith("/")) return;
 
   const st = reportState.get(chatId);
@@ -711,11 +820,25 @@ bot.on("message", async (msg) => {
 
   if (st.step === "site") {
     setReport(chatId, { data: { site: text } });
-    return askCharger(chatId);
+    return askAssetId(chatId);
   }
 
-  if (st.step === "charger") {
-    setReport(chatId, { data: { chargerId: text } });
+  if (st.step === "assetId") {
+    setReport(chatId, { data: { assetId: text } });
+    return askTechnician(chatId);
+  }
+
+  if (st.step === "technician") {
+    setReport(chatId, { data: { technician: text } });
+    return askClientRef(chatId);
+  }
+
+  if (st.step === "clientRef") {
+    setReport(chatId, { data: { clientRef: text } });
+
+    // If report started from a fault card, manufacturer+fault are already set, so skip selection
+    if (st.data?.prefilled) return askActions(chatId);
+
     return askReportManufacturer(chatId);
   }
 
@@ -723,6 +846,29 @@ bot.on("message", async (msg) => {
     setReport(chatId, { data: { notes: text } });
     return finishReport(chatId);
   }
+});
+
+// NEW: Capture photo uploads during the photo step (silent)
+bot.on("photo", async (msg) => {
+  const chatId = msg?.chat?.id;
+  if (!chatId) return;
+
+  const st = reportState.get(chatId);
+  if (!st || st.step !== "UPLOAD_PHOTOS") return;
+
+  const photos = msg.photo || [];
+  if (!photos.length) return;
+
+  const best = photos[photos.length - 1]; // highest res
+  const caption = (msg.caption || "").trim();
+
+  const curPhotos = Array.isArray(st.data.photos) ? st.data.photos : [];
+  curPhotos.push({ file_id: best.file_id, caption });
+
+  setReport(chatId, { data: { photos: curPhotos } });
+
+  // Keep UX clean: acknowledge once per upload
+  return bot.sendMessage(chatId, "📸 Photo added. Upload more, or tap Done.");
 });
 
 // ------------------- SINGLE CALLBACK HANDLER -------------------
@@ -758,6 +904,17 @@ bot.on("callback_query", async (q) => {
     if (mfr === "autel") return showAutelMenu(chatId, messageId);
     if (mfr === "kempower") return showKempowerMenu(chatId, messageId);
     return showManufacturerMenu(chatId, messageId);
+  }
+
+  // Report from fault card / decision tree (autofill)
+  if (data.startsWith("RF|")) {
+    const [, pack, faultId] = data.split("|");
+    const fault = getFaultById(pack, faultId);
+    if (!fault) {
+      return bot.sendMessage(chatId, "⚠️ Could not start report: fault not found.");
+    }
+    clearReport(chatId);
+    return startReportFromFault(chatId, pack, fault);
   }
 
   // ✅ DT BACK ONE STEP
@@ -827,9 +984,7 @@ bot.on("callback_query", async (q) => {
 
     if (type === "KEMPOWER") {
       const f = getFaultById("kempower", id);
-      setReport(chatId, {
-        data: { manufacturer: "kempower", faultTitle: f ? f.title : `Kempower Fault (${id})` },
-      });
+      setReport(chatId, { data: { manufacturer: "kempower", faultTitle: f ? f.title : `Kempower Fault (${id})` } });
       return askActions(chatId);
     }
 
@@ -854,7 +1009,7 @@ bot.on("callback_query", async (q) => {
 
     return upsertMessage(chatId, {
       messageId,
-      text: "Step 5/6 — Select <b>actions performed</b>:",
+      text: "Select <b>actions performed</b>:",
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: buildActionsKeyboard(Array.from(selected)) },
     });
@@ -863,6 +1018,11 @@ bot.on("callback_query", async (q) => {
   if (data.startsWith("r:res:")) {
     const res = data.split(":").slice(2).join(":");
     setReport(chatId, { data: { resolution: res } });
+    return askUploadPhotos(chatId);
+  }
+
+  // Photo step buttons
+  if (data === "PHOTOS_SKIP" || data === "PHOTOS_DONE") {
     return askNotes(chatId);
   }
 
@@ -880,20 +1040,6 @@ bot.on("callback_query", async (q) => {
   if (data === "kempower:menu") {
     resetDt(chatId);
     return showKempowerMenu(chatId, messageId);
-  }
-
-  // ------------------- LEGACY AC -------------------
-  if (data.startsWith("ac:")) {
-    const key = data.split(":")[1];
-    const node = AC[key];
-    if (!node) return;
-
-    return upsertMessage(chatId, {
-      messageId,
-      text: node.text,
-      parse_mode: "HTML",
-      reply_markup: node.buttons,
-    });
   }
 
   // ------------------- FAULT SELECTION -------------------

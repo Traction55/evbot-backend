@@ -1,210 +1,128 @@
 # kempower.yml
 # EVBot Fault Pack: Kempower (On-site Technician v1)
 # Notes:
-# - Each fault has response.telegram_markdown + decision_tree
-# - Keep IDs stable for deep links later
+# - Node-based decision tree: start_node + nodes map
+# - Each node has: prompt, options -> next
+# - Keep IDs stable for deep links
 
 faults:
+
   - id: kp_power_module_fault
     platform: kempower
     charger_type: dc
     title: "Power Module Fault / Module Offline (Kempower)"
-    severity: "high"
+    severity: high
+    tags: [power_module, rectifier, dc_bus, comms, cooling]
+
     response:
       telegram_markdown: |
-        🧰 *Power Module Fault / Module Offline (Kempower)*
+        *Kempower — Power Module Fault / Module Offline*
 
-        *What this usually means*
-        • One or more power modules are not communicating / not enabled
-        • Can be caused by DC bus issues, comms harness, module supply, or a hard fault in a module
+        One or more power modules are not communicating or not enabled.
 
-        *Safety (always)*
-        • Follow LOTO / isolation procedure
-        • Verify no hazardous voltage before touching internal components
+        Common causes:
+        • Module not seated correctly
+        • Loose comms/backplane connector
+        • Module disabled after transient fault
+        • Cooling-related shutdown
+        • Failed power module (least common)
 
-        *Tools*
-        • Multimeter (CAT-rated)
-        • Basic hand tools (Torx/Allen as applicable)
-        • Torque driver (if re-terminating)
-        • Laptop/phone for logs (if available)
+        Tap *Start troubleshooting* to proceed safely.
 
-        Tap *Start troubleshooting* to step through checks.
     decision_tree:
-      start_node: s1_safe
+      start_node: P0
       nodes:
-        s1_safe:
-          prompt: |
-            ✅ *Step 1 — Make safe*
-            • Apply LOTO/isolate per site procedure
-            • Prove dead before touching
-            • Visually inspect for heat/burn marks
 
-            Ready to proceed?
+        P0:
+          prompt: "*Power Module Fault — Start*"
           options:
-            - label: "Yes — safe and isolated"
-              next: s2_visual
-            - label: "No — can’t isolate / unsafe"
-              next: stop_escalate
+            - label: "Module offline / fault active"
+              next: P1
+            - label: "Intermittent"
+              next: P1
 
-        s2_visual:
-          prompt: |
-            🔎 *Step 2 — Visual inspection*
-            Check:
-            • Any obvious burn marks / smell
-            • Loose connectors, comms plugs, module seating
-            • Signs of water ingress / condensation
-
-            Do you see obvious damage?
+        P1:
+          prompt: "*Make safe (LOTO)*"
           options:
-            - label: "Yes — damage/ingress present"
-              next: stop_damage
-            - label: "No — looks OK"
-              next: s3_reseat
+            - label: "Isolated & safe"
+              next: P2
+            - label: "Cannot isolate"
+              next: STOP_ESCALATE
 
-        s3_reseat:
-          prompt: |
-            🔧 *Step 3 — Reseat module & comms*
-            With power isolated:
-            • Reseat affected module(s) (remove/insert firmly)
-            • Reseat comms harness/connectors to module backplane
-            • Confirm plugs are fully latched
-
-            Completed reseat?
+        P2:
+          prompt: "*Visual inspection*"
           options:
-            - label: "Yes — reseated"
-              next: s4_power_on
-            - label: "Not possible / unclear"
-              next: escalate_pack
+            - label: "Damage / ingress visible"
+              next: STOP_DAMAGE
+            - label: "Looks OK"
+              next: P3
 
-        s4_power_on:
-          prompt: |
-            ⚡ *Step 4 — Re-energise & re-check*
-            • Remove tools, close covers as required
-            • Restore power
-            • Observe if module comes online / fault clears
-
-            Result?
+        P3:
+          prompt: "*Reseat module (most common fix)*"
           options:
-            - label: "✅ Fault cleared / module online"
-              next: resolved_monitor
-            - label: "❌ Still offline / fault remains"
-              next: s5_swap_isolate
+            - label: "Reseated"
+              next: P4
+            - label: "Not possible"
+              next: ESCALATE_PACK
 
-        s5_swap_isolate:
-          prompt: |
-            🧪 *Step 5 — Identify if it follows the module*
-            If site configuration allows:
-            • Swap the suspected module with another position (like-for-like)
-            • Power cycle and check if the fault follows the module
-
-            Did the fault follow the module?
+        P4:
+          prompt: "*Restore power & re-check*"
           options:
-            - label: "Yes — follows the module"
-              next: replace_module
-            - label: "No — stays with the slot/system"
-              next: s6_system_checks
-            - label: "Can’t swap modules here"
-              next: s6_system_checks
+            - label: "Module online"
+              next: RESOLVED_MONITOR
+            - label: "Still offline"
+              next: P5
 
-        s6_system_checks:
-          prompt: |
-            🧰 *Step 6 — System-side checks*
-            Check:
-            • DC bus / internal supply indications (if safe and trained)
-            • Backplane/slot connector condition
-            • Any related alarms (cooling, contactor, IMD)
-            • Tightness of obvious terminations (visual + torque only if required)
-
-            Any clear system-side issue found?
+        P5:
+          prompt: "*Does the fault follow the module?*"
           options:
-            - label: "Yes — found wiring/connector issue"
-              next: fix_and_retest
-            - label: "No — nothing obvious"
-              next: escalate_pack
+            - label: "Yes — follows module"
+              next: REPLACE_MODULE
+            - label: "No — stays with slot/system"
+              next: ESCALATE_PACK
+            - label: "Cannot swap"
+              next: ESCALATE_PACK
 
-        fix_and_retest:
-          prompt: |
-            🔩 *Fix & re-test*
-            • Re-terminate/reseat the identified connector
-            • Confirm latching/strain relief
-            • Power cycle and re-check module state
-
-            Result?
+        REPLACE_MODULE:
+          prompt: "*Suspected failed module*"
           options:
-            - label: "✅ Resolved"
-              next: resolved_monitor
-            - label: "❌ Still faulty"
-              next: escalate_pack
+            - label: "Escalate for replacement"
+              next: ESCALATE_PACK
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        replace_module:
-          prompt: |
-            🧩 *Outcome — Suspected faulty power module*
-            • Tag the module as suspect
-            • Replace module if spare available
-            • If no spare: leave system safe and escalate for replacement
-
-            Continue?
+        STOP_DAMAGE:
+          prompt: "*STOP — Damage / overheating found*"
           options:
-            - label: "📦 Replacement required"
-              next: escalate_pack
-            - label: "🏠 Back to Kempower menu"
-              next: menu_kp
+            - label: "Escalate"
+              next: ESCALATE_PACK
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        resolved_monitor:
-          prompt: |
-            ✅ *Resolved*
-            • Confirm charger returns to operational state
-            • Run a test session if possible
-            • Monitor for recurrence
-
-            Next action:
+        STOP_ESCALATE:
+          prompt: "*STOP — Unable to isolate safely*"
           options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-            - label: "🔁 Restart troubleshooting"
-              next: s2_visual
+            - label: "Escalate"
+              next: ESCALATE_PACK
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        stop_damage:
-          prompt: |
-            ⛔ *STOP — Damage / ingress found*
-            • Do not re-energise if unsafe
-            • Photograph damage
-            • Escalate with details and site conditions
+        ESCALATE_PACK:
+          prompt: "*Escalation pack — Power Module*"
           options:
-            - label: "📞 Escalate (pack)"
-              next: escalate_pack
-            - label: "🏠 Kempower menu"
-              next: menu_kp
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        stop_escalate:
-          prompt: |
-            ⛔ *STOP — Unable to isolate safely*
-            • Follow site safety rules
-            • Escalate for support / authorised isolation
+        RESOLVED_MONITOR:
+          prompt: "*Resolved — monitor*"
           options:
-            - label: "📞 Escalate (pack)"
-              next: escalate_pack
-            - label: "🏠 Kempower menu"
-              next: menu_kp
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
+            - label: "Restart"
+              next: P0
 
-        escalate_pack:
-          prompt: |
-            📈 *Escalation pack (send to support)*
-            Include:
-            • Site + charger ID
-            • Exact alarm/fault text + time
-            • Which module/slot affected (if known)
-            • Actions taken (reseat/swap/power cycle)
-            • Photos (module, backplane, any damage)
-            • Any related alarms (cooling/IMD/contactor)
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        menu_kp:
-          prompt: "🏠 Returning to Kempower menu…"
+        MENU_KEMPOWER:
+          prompt: "Returning to Kempower menu…"
           options:
             - label: "Open Kempower menu"
               next: __MENU_KEMPOWER__
@@ -214,123 +132,75 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Backend / OCPP Communication Fault (Kempower)"
-    severity: "high"
+    severity: high
+    tags: [ocpp, backend, comms, modem, sim, network]
+
     response:
       telegram_markdown: |
-        🧰 *Backend / OCPP Communication Fault (Kempower)*
+        *Kempower — Backend / OCPP Communication Fault*
 
-        *Typical symptoms*
-        • Charger shows offline in backend / no remote control
-        • Sessions won’t start or stop reporting correctly
-        • Modem/SIM/network registration issues
+        The charger is not connected to the backend (offline / no remote control).
 
-        *Safety*
-        • Networking checks are usually low risk
-        • Still follow site rules before opening cabinets
+        Common causes:
+        • Modem or SIM registration issue
+        • Antenna damage / poor signal
+        • Network environment (basement, plant room)
+        • Backend endpoint mismatch
 
-        Tap *Start troubleshooting* for onsite checks.
     decision_tree:
-      start_node: s1_confirm
+      start_node: C0
       nodes:
-        s1_confirm:
-          prompt: |
-            ✅ *Step 1 — Confirm comms fault*
-            • Is the charger shown offline in backend?
-            • Is the HMI showing network/OCPP errors?
 
-            What are you seeing?
+        C0:
+          prompt: "*Backend / OCPP offline*"
           options:
-            - label: "Offline / OCPP error confirmed"
-              next: s2_power_cycle
-            - label: "Not sure / no error shown"
-              next: s2_power_cycle
+            - label: "Continue"
+              next: C1
 
-        s2_power_cycle:
-          prompt: |
-            🔁 *Step 2 — Controlled power cycle*
-            • Perform a controlled reboot/power cycle per procedure
-            • Wait for full boot + modem registration
-
-            After reboot, is it online?
+        C1:
+          prompt: "*Reboot / power cycle*"
           options:
-            - label: "✅ Online now"
-              next: resolved_monitor
-            - label: "❌ Still offline"
-              next: s3_signal_sim
+            - label: "Online"
+              next: RESOLVED_MONITOR
+            - label: "Still offline"
+              next: C2
 
-        s3_signal_sim:
+        C2:
+          prompt: "*Basic antenna / SIM checks*"
+          options:
+            - label: "Issue found"
+              next: C1
+            - label: "No issue"
+              next: ADVANCED_NETWORK
+
+        ADVANCED_NETWORK:
           prompt: |
-            📶 *Step 3 — Modem/SIM basic checks*
+            *Deep dive — Network*
             Check:
-            • Antenna connected and undamaged
-            • SIM seated (if accessible) and correct carrier
-            • Any modem LED/status indicators (if present)
-
-            Any obvious issue found?
+            • SIM registered on GSM only
+            • APN incorrect
+            • Carrier outage
+            • Private IP blocked
           options:
-            - label: "Yes — antenna/SIM issue"
-              next: fix_and_retest
-            - label: "No — looks OK"
-              next: s4_network_env
+            - label: "Fixed"
+              next: C1
+            - label: "Escalate"
+              next: ESCALATE_PACK
 
-        s4_network_env:
-          prompt: |
-            🌐 *Step 4 — Site network environment*
-            Check:
-            • Is this site in a low-signal area (basement/plant room)?
-            • Any recent works that could affect reception?
-            • If dual SIM / external antenna is available: try alternate path
-
-            Can you improve signal / antenna position?
+        ESCALATE_PACK:
+          prompt: "*Escalation pack — Backend/OCPP*"
           options:
-            - label: "Yes — adjusted antenna/signal"
-              next: fix_and_retest
-            - label: "No — cannot improve"
-              next: escalate_pack
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        fix_and_retest:
-          prompt: |
-            🔧 *Fix applied — re-test*
-            • Reboot after change
-            • Wait for registration + OCPP reconnect
-
-            Result?
+        RESOLVED_MONITOR:
+          prompt: "*Resolved — monitor*"
           options:
-            - label: "✅ Online"
-              next: resolved_monitor
-            - label: "❌ Still offline"
-              next: escalate_pack
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        resolved_monitor:
-          prompt: |
-            ✅ *Resolved (for now)*
-            • Confirm status online in backend
-            • Run a short test session if possible
-            • Monitor for recurrence
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        escalate_pack:
-          prompt: |
-            📈 *Escalation pack*
-            Send support:
-            • Site + charger ID
-            • Time of failure + screenshots
-            • SIM/antenna checks performed
-            • Reboot results
-            • Signal quality details if known
-            • Any modem status indicators
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        menu_kp:
-          prompt: "🏠 Returning to Kempower menu…"
+        MENU_KEMPOWER:
+          prompt: "Returning to Kempower menu…"
           options:
             - label: "Open Kempower menu"
               next: __MENU_KEMPOWER__
@@ -340,120 +210,49 @@ faults:
     platform: kempower
     charger_type: dc
     title: "E-Stop / Interlock Active (Kempower)"
-    severity: "high"
-    response:
-      telegram_markdown: |
-        🧰 *E-Stop / Interlock Active (Kempower)*
+    severity: high
+    tags: [safety, interlock, estop]
 
-        *Typical causes*
-        • Emergency stop pressed
-        • Door interlock open / safety loop broken
-        • Safety chain wiring issue
-
-        *Safety*
-        • Treat as live equipment until isolated
-        • Follow site isolation procedure before opening cabinets
-
-        Tap *Start troubleshooting*.
     decision_tree:
-      start_node: s1_check_estop
+      start_node: S0
       nodes:
-        s1_check_estop:
-          prompt: |
-            🔴 *Step 1 — Check E-Stop(s)*
-            • Verify all E-Stops are released/reset
-            • Some sites have multiple E-Stops (cabinet + external)
 
-            Is any E-Stop engaged?
+        S0:
+          prompt: "*E-Stop / Interlock active*"
           options:
-            - label: "Yes — found E-Stop engaged"
-              next: s2_reset_estop
-            - label: "No — all released"
-              next: s3_check_doors
+            - label: "Check E-Stops"
+              next: S1
 
-        s2_reset_estop:
-          prompt: |
-            ✅ *Step 2 — Reset E-Stop*
-            • Reset E-Stop(s)
-            • Re-check alarms/status
-
-            Did the interlock alarm clear?
+        S1:
+          prompt: "*Any E-Stop engaged?*"
           options:
-            - label: "✅ Cleared"
-              next: resolved_test
-            - label: "❌ Still active"
-              next: s3_check_doors
+            - label: "Yes"
+              next: RESOLVED_TEST
+            - label: "No"
+              next: S2
 
-        s3_check_doors:
-          prompt: |
-            🚪 *Step 3 — Check doors / interlocks*
-            • Confirm all cabinet doors are fully closed
-            • Check door interlock switches (if accessible)
-            • Look for damaged/loose interlock wiring
-
-            Any door/interlock issue found?
+        S2:
+          prompt: "*Check doors / interlocks*"
           options:
-            - label: "Yes — door/switch/wiring issue"
-              next: fix_and_retest
-            - label: "No — nothing obvious"
-              next: s4_isolate_trace
+            - label: "Issue found"
+              next: RESOLVED_TEST
+            - label: "Nothing obvious"
+              next: ESCALATE_PACK
 
-        s4_isolate_trace:
-          prompt: |
-            🔒 *Step 4 — Isolate and trace safety loop (trained techs only)*
-            If authorised/trained:
-            • Isolate per procedure
-            • Trace safety loop continuity at accessible points
-            • Look for broken conductor / loose terminal
-
-            Found an open circuit/loose terminal?
+        RESOLVED_TEST:
+          prompt: "*Resolved — test charger*"
           options:
-            - label: "Yes — found issue"
-              next: fix_and_retest
-            - label: "No / not authorised"
-              next: escalate_pack
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        fix_and_retest:
-          prompt: |
-            🔧 *Fix applied — re-test*
-            • Restore, reboot if required
-            • Confirm interlock alarm clears
-            • Confirm unit returns to ready state
-
-            Result?
+        ESCALATE_PACK:
+          prompt: "*Escalation pack — Interlock*"
           options:
-            - label: "✅ Resolved"
-              next: resolved_test
-            - label: "❌ Still active"
-              next: escalate_pack
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        resolved_test:
-          prompt: |
-            ✅ *Resolved*
-            • Confirm charger is ready
-            • Perform a test session if possible
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        escalate_pack:
-          prompt: |
-            📈 *Escalation pack*
-            Send support:
-            • Exact interlock alarm text
-            • Which E-Stop(s) checked + results
-            • Door/interlock checks performed
-            • Photos of interlock wiring/switches (if safe)
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        menu_kp:
-          prompt: "🏠 Returning to Kempower menu…"
+        MENU_KEMPOWER:
+          prompt: "Returning to Kempower menu…"
           options:
             - label: "Open Kempower menu"
               next: __MENU_KEMPOWER__
@@ -462,110 +261,58 @@ faults:
   - id: kp_imd_isolation_fault
     platform: kempower
     charger_type: dc
-    title: "Insulation Monitoring / IMD Fault (Kempower)"
-    severity: "critical"
-    response:
-      telegram_markdown: |
-        🧰 *Insulation Monitoring / IMD Fault (Kempower)*
+    title: "IMD / Insulation Fault (Kempower)"
+    severity: critical
+    tags: [imd, insulation, earth_leakage, safety]
 
-        *Important*
-        • IMD/insulation faults can indicate leakage to earth or moisture ingress
-        • Treat as *high risk* until proven otherwise
-
-        *Safety*
-        • LOTO/isolate before opening
-        • Do not bypass safety systems
-
-        Tap *Start troubleshooting*.
     decision_tree:
-      start_node: s1_stop_safe
+      start_node: I0
       nodes:
-        s1_stop_safe:
-          prompt: |
-            ⛔ *Step 1 — Stop & make safe*
-            • Isolate/LOTO per procedure
-            • Inspect for water ingress, damaged cables, contamination
 
-            Do you see moisture/ingress/damage?
+        I0:
+          prompt: "*IMD / insulation fault detected*"
           options:
-            - label: "Yes — ingress/damage present"
-              next: stop_damage
-            - label: "No — looks dry"
-              next: s2_external_cable
+            - label: "Inspect connector/cable"
+              next: I1
 
-        s2_external_cable:
-          prompt: |
-            🔌 *Step 2 — Check external cable/connector*
-            Check:
-            • Cable sheath damage
-            • Connector contamination/moisture
-            • Signs of tracking/burn marks
-
-            Any issue found?
+        I1:
+          prompt: "*Moisture or damage present?*"
           options:
-            - label: "Yes — cable/connector issue"
-              next: stop_damage
-            - label: "No — looks OK"
-              next: s3_isolate_reboot
+            - label: "Yes"
+              next: STOP_DAMAGE
+            - label: "No"
+              next: I2
 
-        s3_isolate_reboot:
-          prompt: |
-            🔁 *Step 3 — Reboot after inspection*
-            • Ensure everything is dry/clean
-            • Restore power
-            • Reboot/power cycle
-            • Check if IMD fault clears
-
-            Result?
+        I2:
+          prompt: "*Reboot & re-test*"
           options:
-            - label: "✅ Cleared"
-              next: resolved_monitor
-            - label: "❌ Still present"
-              next: escalate_pack
+            - label: "Cleared"
+              next: RESOLVED_MONITOR
+            - label: "Still present"
+              next: ESCALATE_PACK
 
-        resolved_monitor:
-          prompt: |
-            ✅ *Cleared (monitor closely)*
-            • Run a controlled test session if permitted
-            • Monitor for recurrence
-            • If recurring, treat as insulation degradation and escalate
-
-            Next:
+        STOP_DAMAGE:
+          prompt: "*STOP — insulation risk*"
           options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
+            - label: "Escalate"
+              next: ESCALATE_PACK
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        stop_damage:
-          prompt: |
-            ⛔ *STOP — IMD/insulation risk*
-            • Do not return to service until resolved
-            • Photograph damage/ingress
-            • Escalate immediately
-
-            Next:
+        ESCALATE_PACK:
+          prompt: "*Escalation pack — IMD*"
           options:
-            - label: "📞 Escalate (pack)"
-              next: escalate_pack
-            - label: "🏠 Kempower menu"
-              next: menu_kp
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        escalate_pack:
-          prompt: |
-            📈 *Escalation pack (IMD fault)*
-            Send support:
-            • Exact IMD/alarm text + time
-            • Weather conditions + recent rain/washdown
-            • Photos: cable/connector/cabinet interior
-            • Actions taken (inspection, cleaning, reboot)
-            • Whether fault is persistent or intermittent
-
-            Next:
+        RESOLVED_MONITOR:
+          prompt: "*Resolved — monitor closely*"
           options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        menu_kp:
-          prompt: "🏠 Returning to Kempower menu…"
+        MENU_KEMPOWER:
+          prompt: "Returning to Kempower menu…"
           options:
             - label: "Open Kempower menu"
               next: __MENU_KEMPOWER__
@@ -574,129 +321,48 @@ faults:
   - id: kp_overtemp_cooling_fault
     platform: kempower
     charger_type: dc
-    title: "Overtemperature / Cooling / Fan Fault (Kempower)"
-    severity: "high"
-    response:
-      telegram_markdown: |
-        🧰 *Overtemperature / Cooling / Fan Fault (Kempower)*
+    title: "Overtemperature / Cooling Fault (Kempower)"
+    severity: high
+    tags: [cooling, fans, filters, airflow]
 
-        *Typical symptoms*
-        • Power derates heavily
-        • Unit stops charging or faults under load
-        • Fan alarms / cooling alarms
-
-        *Safety*
-        • Hot surfaces and moving fans
-        • Isolate before reaching into cabinet
-
-        Tap *Start troubleshooting*.
     decision_tree:
-      start_node: s1_confirm
+      start_node: T0
       nodes:
-        s1_confirm:
-          prompt: |
-            🌡️ *Step 1 — Confirm cooling issue*
-            • Is the unit derating or stopping under load?
-            • Are fans running during operation?
 
-            What’s happening?
+        T0:
+          prompt: "*Overtemperature / cooling fault*"
           options:
-            - label: "Fans not running / obvious cooling alarm"
-              next: s2_visual
-            - label: "Fans running but still overtemp"
-              next: s3_airflow
-            - label: "Not sure"
-              next: s2_visual
+            - label: "Check airflow"
+              next: T1
 
-        s2_visual:
-          prompt: |
-            🔎 *Step 2 — Visual inspection*
-            Check:
-            • Blocked vents/filters
-            • Dust buildup
-            • Damaged fan blades
-            • Loose fan power plugs
-
-            Found blockage/loose plug?
+        T1:
+          prompt: "*Filters dirty / vents blocked?*"
           options:
             - label: "Yes"
-              next: fix_clean
+              next: FIX_FILTERS
             - label: "No"
-              next: s3_airflow
+              next: ESCALATE_PACK
 
-        s3_airflow:
-          prompt: |
-            🌬️ *Step 3 — Airflow & environment*
-            Check:
-            • Heat sources nearby
-            • Cabinet space around vents
-            • Ambient temp extreme
-            • Louvres obstructed
-
-            Can airflow be improved?
+        FIX_FILTERS:
+          prompt: "*Clean filters & vents*"
           options:
-            - label: "Yes — cleared space/vents"
-              next: fix_clean
-            - label: "No — environment unchanged"
-              next: s4_retest
+            - label: "Re-test"
+              next: RESOLVED_MONITOR
 
-        fix_clean:
-          prompt: |
-            🧹 *Step 4 — Clean/secure & re-test*
-            • Clean filters/vents (as per procedure)
-            • Reseat any loose fan power plugs
-            • Restore and run a test charge
-
-            Result?
+        ESCALATE_PACK:
+          prompt: "*Escalation pack — Cooling*"
           options:
-            - label: "✅ Resolved / no derate"
-              next: resolved_monitor
-            - label: "❌ Still derating/faulting"
-              next: s4_retest
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        s4_retest:
-          prompt: |
-            🧪 *Step 5 — Re-test under load*
-            • Attempt a controlled session
-            • Watch for fan operation and alarms
-            • If possible, capture temps/alarms/logs
-
-            Result?
+        RESOLVED_MONITOR:
+          prompt: "*Resolved — monitor*"
           options:
-            - label: "✅ Stable"
-              next: resolved_monitor
-            - label: "❌ Fault persists"
-              next: escalate_pack
+            - label: "Kempower menu"
+              next: MENU_KEMPOWER
 
-        resolved_monitor:
-          prompt: |
-            ✅ *Resolved*
-            • Confirm fans run correctly
-            • Confirm no alarms return
-            • Monitor during peak heat periods
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        escalate_pack:
-          prompt: |
-            📈 *Escalation pack (cooling)*
-            Send support:
-            • Exact alarm text + time
-            • Photos of filters/vents/fans
-            • Ambient temperature/site conditions
-            • Actions taken (cleaning, reseat, retest)
-            • Whether derate occurs only under load
-
-            Next:
-          options:
-            - label: "🏠 Kempower menu"
-              next: menu_kp
-
-        menu_kp:
-          prompt: "🏠 Returning to Kempower menu…"
+        MENU_KEMPOWER:
+          prompt: "Returning to Kempower menu…"
           options:
             - label: "Open Kempower menu"
               next: __MENU_KEMPOWER__

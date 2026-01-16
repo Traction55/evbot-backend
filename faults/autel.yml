@@ -1,11 +1,12 @@
 # autel.yml
-# EVBot Fault Library — Autel DC
+# EVBot Fault Pack: Autel (On-site Technician v1)
 # Notes:
 # - Node-based decision tree: start_node + nodes map
 # - Each node has: prompt, actions, options -> next
-# - Keep IDs stable so your bot can deep-link (e.g., /autel autel_ac_contactor_fault)
+# - Keep IDs stable so your bot can deep-link
 
 faults:
+
   - id: autel_ac_contactor_fault
     platform: autel
     charger_type: dc
@@ -25,752 +26,374 @@ faults:
         - "input contactor"
         - "main contactor"
     severity: high
-    tags:
-      - power
-      - input
-      - contactor
-      - interlock
-      - feedback
-      - three_phase
+    tags: [power, input, contactor, interlock, feedback, three_phase]
 
     response:
       telegram_markdown: |
         *Autel DC — AC Contactor Fault*
-        This usually means the charger *can’t close or verify* the main AC input contactor feeding the rectifier stack.
+        The charger cannot close or verify the main AC input contactor.
 
-        *Most common real causes:*
-        • Missing phase / phase imbalance  
-        • Low control PSU voltage (coil undervoltage)  
-        • Loose coil/aux wiring or failed aux feedback contact  
-        • Safety chain / interlock open (E-stop, door, etc.)  
-        • Contactor coil or contacts actually failed
-
-        Use the decision tree below to isolate whether it’s *supply*, *control*, *feedback*, *interlock*, or *contactor hardware*.
-
-    safety:
-      telegram_markdown: |
-        *Safety (HV / LV)*
-        • Follow LOTO, prove dead, wait for DC bus discharge.
-        • Treat DC bus as live until verified discharged (wait 2–3 min minimum after isolation).
-        • Only proceed if you’re authorised and competent.
-
-    tools:
-      - "Multimeter (AC V + DC V)"
-      - "Torque driver / insulated tools"
-      - "Thermal camera (optional)"
-      - "Screwdrivers / cabinet keys"
-
-    likely_causes:
-      - "Upstream supply issue (missing phase, blown fuse, isolator OFF)"
-      - "Coil drive missing (control board / wiring / PSU rail)"
-      - "Coil undervoltage (PSU weak, voltage sag)"
-      - "Aux feedback not changing state (aux contact failure / wiring)"
-      - "Safety chain open (E-stop, door interlock, internal safety relay)"
-      - "Contactor failure (coil open, contacts welded/pitted)"
+        Most common causes:
+        • Missing phase / imbalance
+        • Low control PSU voltage
+        • Aux feedback or coil wiring fault
+        • Interlock open
+        • Failed contactor
 
     decision_tree:
       start_node: A0
       nodes:
         A0:
-          prompt: |
-            *AC Contactor Fault — Start*
-            Confirm: Is this fault present *right now* and preventing charging?
-          actions:
-            - "If possible, capture event logs / fault timestamp before clearing."
-            - "Ask: does it clear after a reboot but returns?"
+          prompt: "*AC Contactor Fault — Start*"
           options:
-            - label: "Yes, fault active now"
+            - label: "Fault active"
               next: A1
-            - label: "Intermittent / clears after reboot"
+            - label: "Intermittent"
               next: A2
 
         A1:
-          prompt: |
-            *Check Site Supply (most common)*
-            Verify upstream power before opening cabinets:
-            • Isolator ON
-            • 3-phase present (L1/L2/L3)
-            • No blown fuses / phase loss
-            • Phase imbalance not excessive
-          actions:
-            - "Measure L-L voltages (e.g., ~400–415VAC) and compare phases."
-            - "Confirm no phase missing at charger input terminals."
+          prompt: "*Check site supply*"
           options:
-            - label: "Supply OK (all phases present)"
+            - label: "Supply OK"
               next: A3
-            - label: "Missing phase / bad supply"
+            - label: "Missing phase"
               next: FIX_SUPPLY
 
         A2:
-          prompt: |
-            *Intermittent Pattern*
-            If it clears after reboot but returns:
-            • Suspect marginal coil voltage, loose wiring, aux feedback, PSU sag, or heating.
-          actions:
-            - "Proceed through checks in order; don’t replace the contactor first."
+          prompt: "*Intermittent pattern*"
           options:
-            - label: "Continue diagnostics"
+            - label: "Continue"
               next: A1
 
         A3:
-          prompt: |
-            *Perform a Proper Power Cycle*
-            Not just a software reboot:
-            1) AC isolator OFF
-            2) Wait 2–3 minutes (DC bus discharge)
-            3) AC isolator ON
-            Observe startup: do you hear a clean contactor pull-in?
-          actions:
-            - "Listen for a single solid 'clunk' (pull-in)."
-            - "Note any chatter or no actuation."
+          prompt: "*Power cycle & listen for pull-in*"
           options:
-            - label: "Fault clears and stays cleared"
+            - label: "Cleared"
               next: MONITOR
-            - label: "No clunk / no pull-in"
+            - label: "No pull-in"
               next: A4
-            - label: "Chatter / weak pull-in"
+            - label: "Chatter"
               next: A5
             - label: "Clunks but fault remains"
               next: A6
 
         A4:
-          prompt: |
-            *No Pull-in*
-            Likely: coil not being driven OR safety chain open.
-            Next: check interlocks and coil control voltage.
-          actions:
-            - "Check door interlock / E-stop / safety chain state."
-            - "Locate contactor coil terminals and measure coil voltage during pull-in attempt."
+          prompt: "*No pull-in*"
           options:
-            - label: "Safety chain/interlock open"
+            - label: "Interlock open"
               next: FIX_INTERLOCK
-            - label: "Coil voltage absent (0V during attempt)"
+            - label: "No coil voltage"
               next: A7
-            - label: "Coil voltage present (normal) but no pull-in"
+            - label: "Voltage present"
               next: REPLACE_CONTACTOR
 
         A5:
-          prompt: |
-            *Chatter / Weak Pull-in*
-            This is usually undervoltage to coil or a weak PSU rail.
-          actions:
-            - "Measure coil voltage during pull-in (watch for sag)."
-            - "Check control PSU output (commonly 24VDC rail, model dependent)."
-            - "Inspect coil wiring for loose / burnt terminals."
+          prompt: "*Chatter / weak pull-in*"
           options:
-            - label: "Coil/control voltage low or sagging"
+            - label: "Voltage sag"
               next: FIX_PSU_OR_SUPPLY
-            - label: "Voltage normal but still chatter"
+            - label: "Voltage OK"
               next: REPLACE_CONTACTOR
 
         A6:
-          prompt: |
-            *Clunks but Fault Persists*
-            Likely: aux feedback not detected or wiring issue.
-          actions:
-            - "Identify aux/feedback contacts wired to controller."
-            - "Check continuity/state change when contactor closes."
-            - "Inspect crimps, plugs, and harness seating."
+          prompt: "*Aux feedback issue*"
           options:
-            - label: "Aux feedback not changing / wiring fault"
+            - label: "Feedback fault"
               next: FIX_AUX_FEEDBACK
-            - label: "Aux feedback OK but fault persists"
+            - label: "Feedback OK"
               next: A8
 
         A7:
-          prompt: |
-            *Coil Voltage Absent*
-            If contactor never receives coil drive:
-            • controller not commanding closure
-            • safety chain not satisfied
-            • broken wire / connector
-            • PSU rail missing
-          actions:
-            - "Verify safety chain closed (E-stop, door, internal safety relays)."
-            - "Verify control PSU output rail present and stable."
-            - "Inspect coil drive wiring from controller to contactor."
+          prompt: "*No coil command*"
           options:
-            - label: "PSU rail missing/unstable"
+            - label: "PSU issue"
               next: FIX_PSU_OR_SUPPLY
-            - label: "Safety chain issue"
+            - label: "Interlock"
               next: FIX_INTERLOCK
-            - label: "Wiring/connector issue"
+            - label: "Wiring"
               next: FIX_WIRING
-            - label: "Controller not commanding (needs logs/support)"
+            - label: "Controller"
               next: ESCALATE_AUTEL
 
         A8:
-          prompt: |
-            *Firmware / Configuration Check*
-            If hardware looks OK:
-            • Confirm firmware current
-            • Confirm site voltage/grid config matches (400/415, TN/TT as applicable)
-          actions:
-            - "Update firmware (per Autel process) if not current."
-            - "Verify configuration: site-specific voltage and grid parameters."
-            - "Reboot after changes."
+          prompt: "*Firmware / config check*"
           options:
-            - label: "Resolved after firmware/config"
+            - label: "Resolved"
               next: MONITOR
             - label: "Still faulting"
               next: ESCALATE_AUTEL
 
-        # ---- Resolution / End Nodes ----
         FIX_SUPPLY:
-          prompt: |
-            *Fix: Supply Issue*
-            Root cause is upstream power:
-            • Restore missing phase / replace fuse
-            • Fix isolator / upstream breaker
-            Then re-test startup.
-          actions:
-            - "Recheck L-L voltages after repair."
-            - "Power cycle and confirm stable operation."
+          prompt: "*Fix supply issue*"
           options:
-            - label: "Re-test after supply fix"
+            - label: "Re-test"
               next: A3
 
         FIX_INTERLOCK:
-          prompt: |
-            *Fix: Interlock / Safety Chain*
-            Clear E-stop, close doors, confirm interlock loop and safety relays are satisfied.
-          actions:
-            - "Verify interlock inputs in diagnostics if available."
-            - "Fix wiring/microswitch as needed."
+          prompt: "*Fix interlock*"
           options:
-            - label: "Re-test after interlock fix"
+            - label: "Re-test"
               next: A3
 
         FIX_AUX_FEEDBACK:
-          prompt: |
-            *Fix: Aux Feedback*
-            The controller isn’t seeing the contactor state change.
-          actions:
-            - "Repair/replace aux contact block (if separate) or harness."
-            - "Reseat connectors; re-crimp damaged terminals."
+          prompt: "*Fix aux feedback*"
           options:
-            - label: "Re-test after feedback fix"
+            - label: "Re-test"
               next: A3
 
         FIX_PSU_OR_SUPPLY:
-          prompt: |
-            *Fix: Coil/PSU Undervoltage*
-            If coil voltage sags or PSU rail is low:
-            • check control PSU outputs
-            • check for loose/burnt terminals
-            • confirm upstream voltage stability under load
-          actions:
-            - "Measure PSU rail under actuation attempt."
-            - "Inspect for heat damage and high resistance joints."
+          prompt: "*Fix PSU / undervoltage*"
           options:
-            - label: "Re-test after PSU/supply work"
+            - label: "Re-test"
               next: A3
-            - label: "PSU suspected failed (replace/dispatch part)"
-              next: DISPATCH_PSU
 
         FIX_WIRING:
-          prompt: |
-            *Fix: Wiring/Connector*
-            Repair open-circuit/loose coil drive or feedback wiring.
-          actions:
-            - "Continuity check between controller outputs and coil terminals."
-            - "Reseat/replace connectors, repair damaged loom."
+          prompt: "*Fix wiring*"
           options:
-            - label: "Re-test after wiring fix"
+            - label: "Re-test"
               next: A3
 
         REPLACE_CONTACTOR:
-          prompt: |
-            *Replace: AC Contactor*
-            Replace if:
-            • coil voltage is present but no pull-in
-            • contacts welded/pitted
-            • persistent chatter with correct voltage
-          actions:
-            - "Torque terminals to spec."
-            - "Verify aux feedback wiring after replacement."
+          prompt: "*Replace AC contactor*"
           options:
-            - label: "Re-test after replacement"
-              next: A3
-
-        DISPATCH_PSU:
-          prompt: |
-            *Action: Dispatch / Replace Control PSU*
-            Based on measurements, the control PSU rail is unstable/low and preventing reliable contactor operation.
-          actions:
-            - "Dispatch PSU or schedule replacement."
-          options:
-            - label: "After PSU replaced, re-test"
+            - label: "Re-test"
               next: A3
 
         ESCALATE_AUTEL:
-          prompt: |
-            *Escalate to Autel Support*
-            Provide:
-            • fault timestamp
-            • measured L-L voltages
-            • coil voltage during pull-in attempt
-            • aux feedback state result
-            • interlock status
-            • firmware version + config summary
-          actions:
-            - "Request logs + controller diagnostics guidance."
+          prompt: "*Escalate to Autel*"
           options:
             - label: "Back to start"
               next: A0
 
         MONITOR:
-          prompt: |
-            *Monitor*
-            Fault cleared. If it reoccurs:
-            • suspect marginal PSU/coil voltage or feedback intermittency
-            • capture logs before clearing next time
-          actions:
-            - "Monitor station and record recurrence conditions (temp/load/time)."
+          prompt: "*Monitor*"
           options:
-            - label: "Back to start"
-              next: A0
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
-  - id: insulation_monitor_fault
+  - id: autel_dc_contactor_fault
     platform: autel
     charger_type: dc
-    title: "Insulation Monitoring / IMD Fault"
+    title: "DC Contactor Fault / Failed to Close (Autel DC)"
     severity: high
-    tags:
-      - insulation
-      - imd
-      - leakage
-      - dc_bus
-      - moisture
-
-    response:
-      telegram_markdown: |
-        *Autel DC — Insulation Monitoring (IMD) Fault*
-        The charger has detected **leakage between DC conductors and earth**.
-        This is a *safety-critical* fault and must not be bypassed.
-
-    safety:
-      telegram_markdown: |
-        *Safety*
-        • LOTO and prove dead.
-        • Treat as live leakage until confirmed otherwise.
-        • Do NOT megger unless manufacturer procedure allows it.
+    tags: [dc, contactor, output, hv, safety]
 
     decision_tree:
-      start_node: I0
+      start_node: D0
       nodes:
-        I0:
-          prompt: |
-            *IMD Fault — Start*
-            Is the fault active right now and preventing DC enable?
-          actions:
-            - "Capture fault code, timestamp, and weather conditions."
+        D0:
+          prompt: "*DC Contactor Fault — Start*"
           options:
-            - label: "Yes, active now"
-              next: I1
-            - label: "Intermittent / cleared"
-              next: I2
+            - label: "Fault active"
+              next: D1
+            - label: "Intermittent"
+              next: D2
 
-        I1:
-          prompt: |
-            *Visual Moisture Check (Most Common)*
-            Inspect for:
-            • Water ingress
-            • Condensation
-            • Damp cable glands or base
-          actions:
-            - "Inspect cabinet base, filters, glands, DC terminals."
+        D1:
+          prompt: "*Power cycle and observe*"
           options:
-            - label: "Moisture / ingress found"
-              next: FIX_INGRESS
-            - label: "Dry / no visible ingress"
-              next: I3
-
-        I2:
-          prompt: |
-            *Intermittent IMD*
-            Often triggered by humidity, rain, or condensation.
-          actions:
-            - "Ask: did this occur after rain or washdown?"
-          options:
-            - label: "Continue checks"
-              next: I1
-
-        I3:
-          prompt: |
-            *DC Output & Bus Inspection*
-            Check:
-            • DC cables and connectors
-            • Busbars for tracking or contamination
-          actions:
-            - "Look for carbon tracking, residue, damaged insulation."
-          options:
-            - label: "Damage or contamination found"
-              next: FIX_DC_CONTAMINATION
-            - label: "No visible issue"
-              next: I4
-
-        I4:
-          prompt: |
-            *IMD Self-Test / Reset*
-            Perform a full power-down and restart.
-          actions:
-            - "AC isolator OFF → wait discharge → ON."
-          options:
-            - label: "Fault clears"
+            - label: "Cleared"
               next: MONITOR
-            - label: "Fault returns"
-              next: ESCALATE_IMD
+            - label: "No pull-in"
+              next: D3
+            - label: "Closes but faults"
+              next: D6
 
-        FIX_INGRESS:
-          prompt: |
-            *Fix: Water Ingress*
-            Root cause is moisture intrusion.
-          actions:
-            - "Dry cabinet (controlled method only)."
-            - "Repair/replace seals, glands, filters."
+        D2:
+          prompt: "*Intermittent behaviour*"
           options:
-            - label: "Re-test after drying"
-              next: I4
+            - label: "Continue"
+              next: D1
 
-        FIX_DC_CONTAMINATION:
-          prompt: |
-            *Fix: DC Contamination*
-            Tracking or residue is causing leakage.
-          actions:
-            - "Clean per OEM procedure."
-            - "Replace damaged insulation/components."
+        D3:
+          prompt: "*Check coil voltage*"
           options:
-            - label: "Re-test after repair"
-              next: I4
+            - label: "No voltage"
+              next: D4
+            - label: "Voltage present"
+              next: REPLACE_CONTACTOR
+            - label: "Voltage sags"
+              next: FIX_PSU
 
-        ESCALATE_IMD:
-          prompt: |
-            *Escalate — IMD / Leakage*
-            Provide:
-            • Fault code & timestamp
-            • Weather conditions
-            • Photos of cabinet & DC paths
-          actions:
-            - "Request OEM IMD diagnostics guidance."
+        D4:
+          prompt: "*No coil command*"
           options:
-            - label: "Back to start"
-              next: I0
+            - label: "Interlock"
+              next: FIX_INTERLOCK
+            - label: "Wiring"
+              next: FIX_WIRING
+            - label: "Controller"
+              next: ESCALATE_AUTEL
+
+        D6:
+          prompt: "*Aux feedback*"
+          options:
+            - label: "Feedback fault"
+              next: FIX_AUX_FEEDBACK
+            - label: "Welded"
+              next: REPLACE_CONTACTOR
+
+        FIX_PSU:
+          prompt: "*Fix PSU*"
+          options:
+            - label: "Re-test"
+              next: D1
+
+        REPLACE_CONTACTOR:
+          prompt: "*Replace DC contactor*"
+          options:
+            - label: "Re-test"
+              next: D1
+
+        ESCALATE_AUTEL:
+          prompt: "*Escalate to Autel*"
+          options:
+            - label: "Back"
+              next: D0
 
         MONITOR:
-          prompt: |
-            *Monitor*
-            IMD cleared.
-            If it reoccurs, ingress or insulation breakdown is likely.
-          actions:
-            - "Monitor after rain/high humidity."
+          prompt: "*Monitor*"
           options:
-            - label: "Back to start"
-              next: I0
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
-  - id: communication_fault_ocpp
+  - id: autel_backend_ocpp_comms_fault
     platform: autel
     charger_type: dc
-    title: "OCPP / Backend Communication Fault"
-    severity: medium
-    tags:
-      - ocpp
-      - modem
-      - sim
-      - backend
-      - network
+    title: "Backend / OCPP Communication Fault (Autel DC)"
+    severity: high
+    tags: [ocpp, backend, comms, modem, sim, network]
 
     decision_tree:
       start_node: C0
       nodes:
         C0:
-          prompt: |
-            *OCPP / Backend Fault — Start*
-            Is the charger currently **offline** in the backend?
-          actions:
-            - "Confirm status in backend platform."
+          prompt: "*Backend / OCPP offline*"
           options:
-            - label: "Yes, offline"
+            - label: "Continue"
               next: C1
-            - label: "Online but sessions fail"
-              next: C4
 
         C1:
-          prompt: |
-            *Check Modem Status*
-            Verify:
-            • SIM present & active
-            • Signal strength
-          actions:
-            - "Check router/modem LEDs or diagnostics."
+          prompt: "*Reboot charger*"
           options:
-            - label: "No signal / SIM issue"
-              next: FIX_SIM
-            - label: "Signal OK"
+            - label: "Online"
+              next: MONITOR
+            - label: "Still offline"
               next: C2
 
         C2:
-          prompt: |
-            *Power Cycle Comms*
-            Restart modem/control module.
-          actions:
-            - "Wait up to 10 minutes for OCPP reconnect."
+          prompt: "*Basic checks exhausted*"
           options:
-            - label: "Reconnects"
-              next: MONITOR
-            - label: "Still offline"
-              next: C3
+            - label: "📈 Escalate (standard)"
+              next: ESCALATE_AUTEL
+            - label: "🧠 Deep dive — advanced checks"
+              next: ADVANCED_SIM_NETWORK
 
-        C3:
+        ADVANCED_SIM_NETWORK:
           prompt: |
-            *Configuration Check*
-            Verify:
-            • APN
-            • DNS
-            • OCPP URL
-            • Time/date
-          actions:
-            - "Correct any mismatch."
+            🧠 *Deep Dive — SIM / Network / OCPP*
+            Advanced causes to check:
+            • SIM registered on GSM only (no packet data)
+            • Incorrect APN
+            • Carrier outage or throttling
+            • Private IP blocked by backend firewall
+            • DNS or time sync issues
           options:
-            - label: "Fixed after config"
-              next: MONITOR
-            - label: "Still failing"
-              next: ESCALATE_OCPP
-
-        C4:
-          prompt: |
-            *Authorization Failure*
-            Does RFID/app fail at authorization?
-          actions:
-            - "Test with known-good RFID/app."
-          options:
-            - label: "Auth now works"
-              next: MONITOR
-            - label: "Still failing"
-              next: ESCALATE_OCPP
-
-        FIX_SIM:
-          prompt: |
-            *Fix: SIM / Signal*
-            Root cause is connectivity.
-          actions:
-            - "Check antenna, SIM status, carrier coverage."
-          options:
-            - label: "Re-test after fix"
-              next: C2
-
-        ESCALATE_OCPP:
-          prompt: |
-            *Escalate — Backend/OCPP*
-            Provide:
-            • Logs
-            • SIM ICCID & carrier
-            • OCPP status screenshots
-          actions:
-            - "Raise to network/OEM support."
-          options:
-            - label: "Back to start"
-              next: C0
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            OCPP stable.
-          actions:
-            - "Confirm stable heartbeat over time."
-          options:
-            - label: "Back to start"
-              next: C0
-
-
-  - id: emergency_stop_active
-    platform: autel
-    charger_type: dc
-    title: "E-Stop / Interlock Active"
-    severity: high
-    tags:
-      - safety
-      - interlock
-      - estop
-
-    decision_tree:
-      start_node: E0
-      nodes:
-        E0:
-          prompt: |
-            *E-Stop / Interlock Fault — Start*
-            Is the charger preventing startup due to safety?
-          actions:
-            - "Identify which interlock is indicated."
-          options:
-            - label: "Yes"
-              next: E1
-
-        E1:
-          prompt: |
-            *Check All E-Stops*
-            Including:
-            • Charger
-            • Remote pedestals
-          actions:
-            - "Twist/pull to reset fully."
-          options:
-            - label: "E-Stop was engaged"
-              next: FIX_ESTOP
-            - label: "All released"
-              next: E2
-
-        E2:
-          prompt: |
-            *Door / Panel Interlocks*
-            Confirm all doors closed and aligned.
-          actions:
-            - "Inspect microswitches and wiring."
-          options:
-            - label: "Door/interlock fault found"
-              next: FIX_INTERLOCK
+            - label: "Issue fixed"
+              next: C1
             - label: "No issue found"
-              next: ESCALATE_INTERLOCK
+              next: ESCALATE_AUTEL
 
-        FIX_ESTOP:
-          prompt: |
-            *Fix: E-Stop*
-            Reset restored safety loop.
-          actions:
-            - "Confirm UI clears and contactors enable."
+        ESCALATE_AUTEL:
+          prompt: "*Escalate backend / OCPP*"
           options:
-            - label: "Re-test"
-              next: MONITOR
-
-        FIX_INTERLOCK:
-          prompt: |
-            *Fix: Door Interlock*
-            Repair or adjust faulty interlock.
-          actions:
-            - "Replace damaged switch or wiring."
-          options:
-            - label: "Re-test"
-              next: MONITOR
-
-        ESCALATE_INTERLOCK:
-          prompt: |
-            *Escalate — Safety Loop*
-            Possible internal safety relay or wiring fault.
-          actions:
-            - "Provide fault screen + photos."
-          options:
-            - label: "Back to start"
-              next: E0
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
         MONITOR:
-          prompt: |
-            *Monitor*
-            Safety fault cleared.
-          actions:
-            - "Ensure no recurrence."
+          prompt: "*Monitor*"
           options:
-            - label: "Back to start"
-              next: E0
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
-  - id: cooling_fan_fault_overtemp
+  - id: autel_overtemp_cooling_fault
     platform: autel
     charger_type: dc
-    title: "Cooling / Fan Fault (Overtemperature Risk)"
-    severity: medium
-    tags:
-      - cooling
-      - fan
-      - thermal
-      - overtemp
+    title: "Overtemperature / Cooling Fault (Autel DC)"
+    severity: high
+    tags: [cooling, overtemp, fans, filters]
 
     decision_tree:
       start_node: T0
       nodes:
         T0:
-          prompt: |
-            *Cooling / Overtemp Fault — Start*
-            Has the charger derated or stopped due to temperature?
-          actions:
-            - "Note ambient temperature and load."
+          prompt: "*Overtemperature detected*"
           options:
-            - label: "Yes"
+            - label: "Check airflow"
               next: T1
 
         T1:
-          prompt: |
-            *Filter Check (Most Common)*
-            Are filters blocked or dirty?
-          actions:
-            - "Inspect intake and exhaust filters."
+          prompt: "*Filters dirty?*"
           options:
-            - label: "Dirty/blocked"
+            - label: "Yes"
               next: FIX_FILTERS
-            - label: "Clean"
-              next: T2
-
-        T2:
-          prompt: |
-            *Fan Operation*
-            Do fans run when commanded?
-          actions:
-            - "Listen and visually confirm airflow."
-          options:
-            - label: "Fan not running / noisy"
-              next: FIX_FAN
-            - label: "Fans OK"
-              next: T3
-
-        T3:
-          prompt: |
-            *Thermal Re-Test*
-            Run controlled load after cooldown.
-          actions:
-            - "Monitor temps and derating."
-          options:
-            - label: "No fault"
-              next: MONITOR
-            - label: "Fault returns"
-              next: ESCALATE_THERMAL
+            - label: "No"
+              next: ESCALATE_AUTEL
 
         FIX_FILTERS:
-          prompt: |
-            *Fix: Filters*
-            Restricted airflow caused overheating.
-          actions:
-            - "Clean or replace filters."
+          prompt: "*Clean filters*"
           options:
             - label: "Re-test"
-              next: T3
+              next: MONITOR
 
-        FIX_FAN:
-          prompt: |
-            *Fix: Fan*
-            Cooling fan failed or degraded.
-          actions:
-            - "Replace fan assembly."
+        ESCALATE_AUTEL:
+          prompt: "*Escalate thermal fault*"
           options:
-            - label: "Re-test"
-              next: T3
-
-        ESCALATE_THERMAL:
-          prompt: |
-            *Escalate — Thermal*
-            Possible sensor or internal cooling fault.
-          actions:
-            - "Send logs, temps, photos."
-          options:
-            - label: "Back to start"
-              next: T0
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
         MONITOR:
-          prompt: |
-            *Monitor*
-            Cooling operating normally.
-          actions:
-            - "Recommend filter maintenance interval."
+          prompt: "*Monitor*"
           options:
-            - label: "Back to start"
-              next: T0
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+
+  - id: autel_power_module_fault
+    platform: autel
+    charger_type: dc
+    title: "Power Module Fault / Module Offline (Autel DC)"
+    severity: high
+    tags: [power_module, rectifier, dc_bus, comms, cooling]
+
+    decision_tree:
+      start_node: P0
+      nodes:
+        P0:
+          prompt: "*Power module offline*"
+          options:
+            - label: "Reseat module"
+              next: P1
+
+        P1:
+          prompt: "*Re-test*"
+          options:
+            - label: "Resolved"
+              next: MONITOR
+            - label: "Still offline"
+              next: ESCALATE_AUTEL
+
+        ESCALATE_AUTEL:
+          prompt: "*Escalate power module*"
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        MONITOR:
+          prompt: "*Monitor*"
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
