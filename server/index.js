@@ -759,6 +759,24 @@ const AC = {
 };
 
 // ------------------- MENU HELPERS -------------------
+function showManufacturerMenu(chatId, messageId) {
+  resetDt(chatId);
+
+  const rows = [
+    [{ text: "🔵 Autel", callback_data: "mfr:autel" }],
+    [{ text: "🟢 Kempower", callback_data: "mfr:kempower" }],
+    [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
+    [{ text: "🔁 Reset", callback_data: "reset" }],
+  ];
+
+  return upsertMessage(chatId, {
+    messageId,
+    text: "⚡ <b>EVBot – Troubleshooting</b>\n\nSelect the charger manufacturer:",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
 function buildAutelMenuKeyboard() {
   const data = loadAutel();
   const faults = data.faults || [];
@@ -774,11 +792,11 @@ function buildAutelMenuKeyboard() {
   }
 
   rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
+  rows.push([{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }]);
   rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
 
   return rows;
 }
-
 
 async function showAutelMenu(chatId, messageId) {
   const rows = buildAutelMenuKeyboard();
@@ -795,8 +813,7 @@ bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
   clearReport(chatId);
   resetDt(chatId);
-  await showAutelMenu(chatId);
-  await bot.sendMessage(chatId, "🔄 Reset complete. Select a troubleshooting option below 👇");
+  await showManufacturerMenu(chatId);
 });
 
 bot.onText(/^\/ping$/, async (msg) => {
@@ -858,11 +875,46 @@ bot.on("callback_query", async (q) => {
   if (!chatId) return;
   if (data === "noop") return;
 
-  // Global reset
+  // Global reset -> go to manufacturer menu
   if (data === "reset") {
     clearReport(chatId);
     resetDt(chatId);
-    return showAutelMenu(chatId, messageId);
+    return showManufacturerMenu(chatId, messageId);
+  }
+
+  // Back to manufacturer menu
+  if (data === "menu:mfr") {
+    clearReport(chatId);
+    resetDt(chatId);
+    return showManufacturerMenu(chatId, messageId);
+  }
+
+  // Manufacturer selection
+  if (data.startsWith("mfr:")) {
+    const mfr = data.split(":")[1];
+
+    if (mfr === "autel") {
+      return showAutelMenu(chatId, messageId);
+    }
+
+    if (mfr === "kempower") {
+      return upsertMessage(chatId, {
+        messageId,
+        text:
+          "🟢 <b>Kempower troubleshooting</b>\n\n" +
+          "Coming next.\n\n" +
+          "For now, select <b>Autel</b> to continue.",
+        parse_mode: "HTML",
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🔵 Autel", callback_data: "mfr:autel" }],
+            [{ text: "⬅️ Back", callback_data: "menu:mfr" }],
+          ],
+        },
+      });
+    }
+
+    return showManufacturerMenu(chatId, messageId);
   }
 
   // ✅ DT BACK ONE STEP
