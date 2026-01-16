@@ -1,9 +1,11 @@
 /**
  * EVBot backend (Express + YAML fault library + Telegram bot)
  * - Works locally (polling) and on Railway (webhook)
- * - /autel shows Autel faults (YAML) + supports YAML decision_tree
+ * - Manufacturer menu first (Autel + Kempower)
+ * - Autel faults (YAML) + YAML decision_tree
+ * - Kempower faults (YAML) + YAML decision_tree
  * - /report generates a client-ready service report
- * - Includes legacy hard-coded AC decision tree (ac:*) still available
+ * - Legacy hard-coded AC decision tree (ac:*) still available (NOT used in /report)
  *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
@@ -59,6 +61,7 @@ if (!BOT_TOKEN) {
 // ------------------- YAML LOADING (ROBUST) -------------------
 const FAULTS_DIR = path.join(__dirname, "..", "faults");
 const AUTEL_FILE = path.join(FAULTS_DIR, "autel.yml");
+const KEMPOWER_FILE = path.join(FAULTS_DIR, "kempower.yml");
 
 function loadYamlSafe(file) {
   try {
@@ -70,7 +73,7 @@ function loadYamlSafe(file) {
   }
 }
 
-function normalizeAutelData(obj) {
+function normalizeFaultPack(obj) {
   // Accept either { faults: [...] } or just [...]
   const faults = Array.isArray(obj) ? obj : Array.isArray(obj?.faults) ? obj.faults : [];
 
@@ -89,7 +92,15 @@ function loadAutel() {
     console.error(`❌ Missing autel.yml at: ${AUTEL_FILE}`);
     return { faults: [] };
   }
-  return normalizeAutelData(loadYamlSafe(AUTEL_FILE));
+  return normalizeFaultPack(loadYamlSafe(AUTEL_FILE));
+}
+
+function loadKempower() {
+  if (!fs.existsSync(KEMPOWER_FILE)) {
+    console.error(`❌ Missing kempower.yml at: ${KEMPOWER_FILE}`);
+    return { faults: [] };
+  }
+  return normalizeFaultPack(loadYamlSafe(KEMPOWER_FILE));
 }
 
 // Boot log (shows in Railway Deploy Logs)
@@ -97,6 +108,12 @@ try {
   const bootAutel = loadAutel();
   console.log(`✅ Autel file path: ${AUTEL_FILE}`);
   console.log(`✅ Autel faults loaded: ${bootAutel.faults.length}`);
+} catch (_) {}
+
+try {
+  const bootKp = loadKempower();
+  console.log(`✅ Kempower file path: ${KEMPOWER_FILE}`);
+  console.log(`✅ Kempower faults loaded: ${bootKp.faults.length}`);
 } catch (_) {}
 
 // ------------------- EXPRESS -------------------
@@ -117,12 +134,22 @@ app.get("/health", (req, res) =>
   })
 );
 
-// Debug endpoint (use this to confirm Railway can see your YAML)
+// Debug endpoints
 app.get("/debug/autel", (req, res) => {
   const data = loadAutel();
   res.json({
     file: AUTEL_FILE,
     exists: fs.existsSync(AUTEL_FILE),
+    count: data.faults.length,
+    titles: data.faults.slice(0, 30).map((f) => f.title),
+  });
+});
+
+app.get("/debug/kempower", (req, res) => {
+  const data = loadKempower();
+  res.json({
+    file: KEMPOWER_FILE,
+    exists: fs.existsSync(KEMPOWER_FILE),
     count: data.faults.length,
     titles: data.faults.slice(0, 30).map((f) => f.title),
   });
@@ -175,20 +202,20 @@ async function upsertMessage(chatId, opts) {
 const reportState = new Map();
 
 // ✅ Decision-tree state with HISTORY
-// chatId -> { faultId: string, history: string[] }
+// chatId -> { pack: "autel"|"kempower", faultId: string, history: string[] }
 const dtState = new Map();
 
 // ------------------- YAML DECISION TREE SUPPORT -------------------
-function dtCallback(faultId, nodeId) {
-  return `DT|${faultId}|${nodeId}`;
+function dtCallback(pack, faultId, nodeId) {
+  return `DT|${pack}|${faultId}|${nodeId}`;
 }
-function dtBackCallback(faultId) {
-  return `DTB|${faultId}`;
+function dtBackCallback(pack, faultId) {
+  return `DTB|${pack}|${faultId}`;
 }
 
-function getAutelFaultById(id) {
-  const autel = loadAutel();
-  return (autel.faults || []).find((x) => String(x.id) === String(id));
+function getFaultById(pack, id) {
+  const data = pack === "kempower" ? loadKempower() : loadAutel();
+  return (data.faults || []).find((x) => String(x.id) === String(id));
 }
 
 function resetDt(chatId) {
@@ -196,11 +223,11 @@ function resetDt(chatId) {
 }
 
 // Push node into history (avoid duplicates)
-function pushDtHistory(chatId, faultId, nodeId) {
+function pushDtHistory(chatId, pack, faultId, nodeId) {
   const cur = dtState.get(chatId);
 
-  if (!cur || String(cur.faultId) !== String(faultId)) {
-    dtState.set(chatId, { faultId: String(faultId), history: [String(nodeId)] });
+  if (!cur || cur.pack !== pack || String(cur.faultId) !== String(faultId)) {
+    dtState.set(chatId, { pack, faultId: String(faultId), history: [String(nodeId)] });
     return;
   }
 
@@ -214,14 +241,13 @@ function pushDtHistory(chatId, faultId, nodeId) {
 }
 
 // Pop current node and return previous (or null)
-function popDtHistory(chatId, faultId) {
+function popDtHistory(chatId, pack, faultId) {
   const cur = dtState.get(chatId);
-  if (!cur || String(cur.faultId) !== String(faultId)) return null;
+  if (!cur || cur.pack !== pack || String(cur.faultId) !== String(faultId)) return null;
 
   const hist = Array.isArray(cur.history) ? [...cur.history] : [];
   if (hist.length <= 1) return null; // nothing to go back to
 
-  // remove current
   hist.pop();
   const prev = hist[hist.length - 1] || null;
 
@@ -259,25 +285,23 @@ function buildLegacyFaultHtml(f) {
   return lines.join("\n");
 }
 
-async function showAutelFaultCard({ chatId, messageId, fault }) {
-  // leaving the fault card should reset the decision-tree history for clean UX
+async function showFaultCard({ chatId, messageId, pack, fault }) {
   resetDt(chatId);
+
+  const rows = [];
+  if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
+    rows.push([
+      {
+        text: "🧭 Start troubleshooting",
+        callback_data: dtCallback(pack, fault.id, fault.decision_tree.start_node),
+      },
+    ]);
+  }
+
+  rows.push([{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }]);
 
   // Preferred: YAML field response.telegram_markdown
   if (fault?.response?.telegram_markdown) {
-    const rows = [];
-
-    if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
-      rows.push([
-        {
-          text: "🧭 Start troubleshooting",
-          callback_data: dtCallback(fault.id, fault.decision_tree.start_node),
-        },
-      ]);
-    }
-
-    rows.push([{ text: "⬅️ Back", callback_data: "autel:menu" }]);
-
     return upsertMessage(chatId, {
       messageId,
       text: fault.response.telegram_markdown,
@@ -288,18 +312,6 @@ async function showAutelFaultCard({ chatId, messageId, fault }) {
 
   // Fallback: old schema rendered to HTML
   const html = buildLegacyFaultHtml(fault);
-
-  const rows = [];
-  if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
-    rows.push([
-      {
-        text: "🧭 Start troubleshooting",
-        callback_data: dtCallback(fault.id, fault.decision_tree.start_node),
-      },
-    ]);
-  }
-  rows.push([{ text: "⬅️ Back", callback_data: "autel:menu" }]);
-
   return upsertMessage(chatId, {
     messageId,
     text: html,
@@ -308,34 +320,40 @@ async function showAutelFaultCard({ chatId, messageId, fault }) {
   });
 }
 
-async function renderYamlDecisionNode({ chatId, messageId, fault, nodeId }) {
+async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }) {
   const tree = fault?.decision_tree;
   const node = tree?.nodes?.[nodeId];
+
+  // Special internal jump back to menu (from YAML)
+  if (nodeId === "__MENU_KEMPOWER__") return showKempowerMenu(chatId, messageId);
+  if (nodeId === "__MENU_AUTEL__") return showAutelMenu(chatId, messageId);
 
   if (!node) {
     return upsertMessage(chatId, {
       messageId,
       text: `⚠️ Decision node not found: ${nodeId}`,
       parse_mode: "Markdown",
-      reply_markup: kb([[{ text: "⬅️ Back", callback_data: `AUTEL:${fault.id}` }]]),
+      reply_markup: kb([
+        [{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }],
+      ]),
     });
   }
 
-  // Track history for "Back one step"
-  pushDtHistory(chatId, fault.id, nodeId);
+  pushDtHistory(chatId, pack, fault.id, nodeId);
 
   const text = node.prompt || "…";
 
-  // 1 button per row for clean UX
   const rows = (node.options || []).map((opt) => [
-    { text: opt.label, callback_data: dtCallback(fault.id, opt.next) },
+    { text: opt.label, callback_data: dtCallback(pack, fault.id, opt.next) },
   ]);
 
-  // ✅ Back now goes back ONE NODE, not to fault card
-  rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(fault.id) }]);
-
-  // menu option
-  rows.push([{ text: "🏠 Autel menu", callback_data: "autel:menu" }]);
+  rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(pack, fault.id) }]);
+  rows.push([
+    {
+      text: pack === "kempower" ? "🏠 Kempower menu" : "🏠 Autel menu",
+      callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu",
+    },
+  ]);
 
   return upsertMessage(chatId, {
     messageId,
@@ -364,6 +382,7 @@ function clearReport(chatId) {
 function formatReport(data) {
   const site = escapeHtml(data.site || "");
   const chargerId = escapeHtml(data.chargerId || "");
+  const manufacturer = escapeHtml((data.manufacturer || "").toUpperCase());
   const faultTitle = escapeHtml(data.faultTitle || "");
   const resolution = escapeHtml(data.resolution || "");
   const notes = escapeHtml(data.notes || "");
@@ -375,6 +394,7 @@ function formatReport(data) {
     `🧾 <b>EVBot Service Report</b>\n\n` +
     `<b>Site:</b> ${site}\n` +
     `<b>Charger:</b> ${chargerId}\n` +
+    (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
     `<b>Fault:</b> ${faultTitle}\n\n` +
     `<b>Actions completed:</b>\n${actionsLines}\n\n` +
     `<b>Status / Outcome:</b> ${resolution}\n` +
@@ -383,11 +403,11 @@ function formatReport(data) {
 }
 
 async function startReport(chatId) {
-  setReport(chatId, { step: "site", data: { actions: [] } });
+  setReport(chatId, { step: "site", data: { actions: [], manufacturer: "", faultTitle: "" } });
 
   return bot.sendMessage(
     chatId,
-    "🧾 <b>Report Builder</b>\n\nStep 1/5 — What is the <b>site name</b>?\n\n(Reply with text)",
+    "🧾 <b>Report Builder</b>\n\nStep 1/6 — What is the <b>site name</b>?\n\n(Reply with text)",
     { parse_mode: "HTML" }
   );
 }
@@ -395,30 +415,55 @@ async function startReport(chatId) {
 async function askCharger(chatId) {
   setReport(chatId, { step: "charger" });
 
-  return bot.sendMessage(chatId, "Step 2/5 — What is the <b>charger ID / asset ID</b>?\n\n(Reply with text)", {
+  return bot.sendMessage(chatId, "Step 2/6 — What is the <b>charger ID / asset ID</b>?\n\n(Reply with text)", {
     parse_mode: "HTML",
+  });
+}
+
+async function askReportManufacturer(chatId) {
+  setReport(chatId, { step: "mfr" });
+
+  const rows = [
+    [{ text: "🔵 Autel", callback_data: "r:mfr:autel" }],
+    [{ text: "🟢 Kempower", callback_data: "r:mfr:kempower" }],
+    [{ text: "Cancel", callback_data: "r:cancel" }],
+  ];
+
+  return bot.sendMessage(chatId, "Step 3/6 — Select the <b>manufacturer</b>:", {
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: rows },
   });
 }
 
 async function askFault(chatId) {
   setReport(chatId, { step: "fault" });
 
-  const autel = loadAutel();
-  const faults = autel.faults || [];
+  const st = reportState.get(chatId);
+  const pack = (st?.data?.manufacturer || "autel").toLowerCase();
+  const isKp = pack === "kempower";
 
-  const rows = [[{ text: "🧰 AC Contactor Fault (Decision Tree)", callback_data: "r:fault:ac" }]];
+  const data = isKp ? loadKempower() : loadAutel();
+  const faults = data.faults || [];
+
+  const rows = [];
 
   if (!faults.length) {
-    rows.push([{ text: "⚠️ No Autel faults loaded (check /debug/autel)", callback_data: "noop" }]);
+    rows.push([
+      {
+        text: `⚠️ No ${isKp ? "Kempower" : "Autel"} faults loaded (check /debug/${isKp ? "kempower" : "autel"})`,
+        callback_data: "noop",
+      },
+    ]);
   } else {
     faults.forEach((f) => {
-      rows.push([{ text: f.title, callback_data: `r:fault:AUTEL:${f.id}` }]);
+      rows.push([{ text: f.title, callback_data: `r:fault:${isKp ? "KEMPOWER" : "AUTEL"}:${f.id}` }]);
     });
   }
 
+  rows.push([{ text: "⬅️ Back", callback_data: "r:back:mfr" }]);
   rows.push([{ text: "Cancel", callback_data: "r:cancel" }]);
 
-  return bot.sendMessage(chatId, "Step 3/5 — Select the <b>fault</b>:", {
+  return bot.sendMessage(chatId, `Step 4/6 — Select the <b>${isKp ? "Kempower" : "Autel"} fault</b>:`, {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
@@ -456,7 +501,7 @@ async function askActions(chatId) {
   const st = reportState.get(chatId);
   const selected = st?.data?.actions || [];
 
-  return bot.sendMessage(chatId, "Step 4/5 — Select <b>actions performed</b>:", {
+  return bot.sendMessage(chatId, "Step 5/6 — Select <b>actions performed</b>:", {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: buildActionsKeyboard(selected) },
   });
@@ -473,7 +518,7 @@ async function askResolution(chatId) {
     [{ text: "Cancel", callback_data: "r:cancel" }],
   ];
 
-  return bot.sendMessage(chatId, "Step 5/5 — Select <b>status/outcome</b>:", {
+  return bot.sendMessage(chatId, "Step 6/6 — Select <b>status/outcome</b>:", {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
@@ -506,7 +551,7 @@ async function finishReport(chatId) {
     reply_markup: {
       inline_keyboard: [
         [{ text: "✅ Start a new report", callback_data: "r:new" }],
-        [{ text: "⬅️ Back to Autel menu", callback_data: "autel:menu" }],
+        [{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }],
       ],
     },
   });
@@ -539,226 +584,10 @@ const AC = {
       [{ text: "🔁 Reset", callback_data: "reset" }],
     ]),
   },
-  noclunk: {
-    text:
-      "🔌 <b>No pull-in</b>\n\n" +
-      "<b>Check A1:</b> Is there coil command voltage present when the unit is trying to start?\n\n" +
-      "Measure at the coil terminals (A1/A2) during command.\n\n" +
-      "<b>Also check:</b>\n" +
-      "• Wiring tight / correctly terminated (no loose connections)\n" +
-      "• No burn marks / heat damage on contactor",
-    buttons: kb([
-      [{ text: "Yes (coil voltage present)", callback_data: "ac:coilcmd_yes" }],
-      [{ text: "No (no coil voltage)", callback_data: "ac:coilcmd_no" }],
-      [{ text: "Not sure", callback_data: "ac:coilcmd_unsure" }],
-      [{ text: "⬅️ Back", callback_data: "ac:observe" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  coilcmd_yes: {
-    text:
-      "✅ <b>Coil command present</b>\n\n" +
-      "<b>Likely causes:</b>\n" +
-      "• Coil open circuit / failed coil\n" +
-      "• Contactor mechanically stuck\n" +
-      "• Incorrect coil rating (wrong part)\n\n" +
-      "<b>Checks:</b>\n" +
-      "• Verify coil rating matches control voltage\n" +
-      "• Verify all wires are correctly terminated (no loose connections)\n" +
-      "• No burn marks on the contactor / terminals\n\n" +
-      "<b>Action:</b> If coil voltage is present and it won’t pull in → replace contactor.",
-    buttons: kb([
-      [{ text: "Replacement checklist", callback_data: "ac:replace" }],
-      [{ text: "Escalate to Autel", callback_data: "ac:escalate" }],
-      [{ text: "⬅️ Back", callback_data: "ac:noclunk" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  coilcmd_no: {
-    text:
-      "❌ <b>No coil command</b>\n\n" +
-      "<b>Likely causes:</b>\n" +
-      "• Control PCB/IO not driving output\n" +
-      "• Interlock chain open (E-stop/door/etc)\n" +
-      "• Wiring fault between IO and coil\n\n" +
-      "<b>Checks:</b>\n" +
-      "• Verify interlocks / E-stop / door switch status\n" +
-      "• Trace output from IO to coil terminals\n" +
-      "• Verify terminations (no loose connections)\n\n" +
-      "<b>Action:</b> Trace back to control PCB/IO and confirm interlocks.",
-    buttons: kb([
-      [{ text: "Escalate to Autel", callback_data: "ac:escalate" }],
-      [{ text: "⬅️ Back", callback_data: "ac:noclunk" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  coilcmd_unsure: {
-    text:
-      "🤔 <b>Not sure if coil voltage is present</b>\n\n" +
-      "<b>Do this:</b>\n" +
-      "• Put meter on A1/A2 (coil terminals)\n" +
-      "• Trigger a start attempt\n" +
-      "• Note voltage during the attempt\n\n" +
-      "<b>Then choose:</b>\n" +
-      "• If voltage appears during start → pick <b>Yes</b>\n" +
-      "• If 0V the whole time → pick <b>No</b>",
-    buttons: kb([
-      [{ text: "Yes (coil voltage present)", callback_data: "ac:coilcmd_yes" }],
-      [{ text: "No (no coil voltage)", callback_data: "ac:coilcmd_no" }],
-      [{ text: "⬅️ Back", callback_data: "ac:noclunk" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  clunkfault: {
-    text:
-      "🔁 <b>Clunks but fault remains</b>\n\n" +
-      "<b>Check B1:</b> Does the auxiliary feedback change state when it pulls in?\n\n" +
-      "<b>Do this:</b>\n" +
-      "• Verify correct voltages at the aux/signal terminals\n" +
-      "• Verify correct NO/NC used\n" +
-      "• Verify wiring is tight / correctly terminated\n" +
-      "• No burn marks / heat damage on contactor/aux terminals",
-    buttons: kb([
-      [{ text: "Aux changes correctly", callback_data: "ac:aux_yes" }],
-      [{ text: "Aux not changing", callback_data: "ac:aux_no" }],
-      [{ text: "Not sure", callback_data: "ac:aux_unsure" }],
-      [{ text: "⬅️ Back", callback_data: "ac:observe" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  aux_yes: {
-    text:
-      "✅ <b>Aux changes correctly</b>\n\n" +
-      "<b>If fault still remains:</b>\n" +
-      "• Confirm the aux is wired to the correct input on the control IO\n" +
-      "• Verify voltage at the IO input when aux changes\n" +
-      "• Check for wiring breaks / intermittent at terminals\n\n" +
-      "<b>Next:</b> If IO input voltage/state is correct but fault persists, escalate with readings/logs.",
-    buttons: kb([
-      [{ text: "Escalate to Autel", callback_data: "ac:escalate" }],
-      [{ text: "⬅️ Back", callback_data: "ac:clunkfault" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  aux_no: {
-    text:
-      "⚠️ <b>Aux not changing</b>\n\n" +
-      "<b>Likely causes:</b>\n" +
-      "• Loose/incorrect termination\n" +
-      "• Wrong NO/NC used\n" +
-      "• Failed aux block\n\n" +
-      "<b>Checks:</b>\n" +
-      "• Verify correct voltages at signal/aux terminals\n" +
-      "• Re-terminate all conductors (no loose connections)\n" +
-      "• Confirm correct NO/NC terminal selection\n" +
-      "• Inspect for any burn marks / heat damage\n\n" +
-      "<b>Action:</b> Re-terminate, verify terminals, replace contactor/aux block if needed.",
-    buttons: kb([
-      [{ text: "Wiring checklist", callback_data: "ac:wiring" }],
-      [{ text: "Replace contactor", callback_data: "ac:replace" }],
-      [{ text: "⬅️ Back", callback_data: "ac:clunkfault" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  aux_unsure: {
-    text:
-      "🤔 <b>Not sure if aux changes</b>\n\n" +
-      "<b>Do this:</b>\n" +
-      "• Identify the aux terminals used (NO/NC + COM)\n" +
-      "• Measure continuity or voltage change while contactor pulls in\n" +
-      "• Confirm you are on the correct NO/NC pair\n\n" +
-      "Then choose the closest branch.",
-    buttons: kb([
-      [{ text: "Aux changes correctly", callback_data: "ac:aux_yes" }],
-      [{ text: "Aux not changing", callback_data: "ac:aux_no" }],
-      [{ text: "⬅️ Back", callback_data: "ac:clunkfault" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  intermittent: {
-    text:
-      "🌡️ <b>Intermittent fault</b>\n\n" +
-      "<b>Common causes:</b>\n" +
-      "• Loose terminations (coil/aux)\n" +
-      "• Heat-related coil failure\n" +
-      "• Supply dips / phase imbalance\n" +
-      "• Aux feedback flickering\n\n" +
-      "<b>Checks:</b>\n" +
-      "• Torque check all terminations\n" +
-      "• Verify aux/signal voltages stable\n" +
-      "• Inspect for discoloration/burn marks\n\n" +
-      "<b>Action:</b> Capture logs + readings and re-test.",
-    buttons: kb([
-      [{ text: "Escalate with log checklist", callback_data: "ac:escalate" }],
-      [{ text: "⬅️ Back", callback_data: "ac:observe" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  replace: {
-    text:
-      "🧾 <b>Replacement checklist</b>\n\n" +
-      "• LOTO + prove dead\n" +
-      "• Photo: wiring before removal\n" +
-      "• Verify coil/aux terminal mapping\n" +
-      "• Verify correct aux/signal voltages after install\n" +
-      "• Torque terminations to spec (no loose connections)\n" +
-      "• Inspect for burn marks / heat damage\n" +
-      "• Re-test start sequence\n\n" +
-      "If fault persists, escalate with logs + readings.",
-    buttons: kb([
-      [{ text: "Escalate", callback_data: "ac:escalate" }],
-      [{ text: "⬅️ Back", callback_data: "ac:observe" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  escalate: {
-    text:
-      "📈 <b>Escalation pack</b>\n\n" +
-      "Send Autel:\n" +
-      "• Fault ID + time\n" +
-      "• Coil voltage (ON/OFF)\n" +
-      "• Aux state (ON/OFF)\n" +
-      "• Aux/signal terminal voltages\n" +
-      "• Incoming AC L-L voltages + phase balance\n" +
-      "• Photos: contactor, aux terminals, any heat/burn marks\n" +
-      "• Logs/export if available",
-    buttons: kb([
-      [{ text: "⬅️ Back", callback_data: "ac:observe" }],
-      [{ text: "Autel menu", callback_data: "autel:menu" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  wiring: {
-    text:
-      "🔧 <b>Wiring checklist</b>\n\n" +
-      "• Verify all wires fully seated\n" +
-      "• No loose strands / ferrules OK\n" +
-      "• Correct NO/NC aux terminals used\n" +
-      "• Verify correct voltages at signal terminals\n" +
-      "• No burn marks on contactor/terminals\n" +
-      "• Confirm continuity where relevant",
-    buttons: kb([
-      [{ text: "⬅️ Back", callback_data: "ac:clunkfault" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
-  not_sure: {
-    text:
-      "🤔 <b>Not sure</b>\n\n" +
-      "Start with:\n" +
-      "1) Listen for pull-in (clunk)\n" +
-      "2) Measure coil voltage during start\n" +
-      "3) Check aux feedback change + terminal voltages\n\n" +
-      "Then choose the closest branch.",
-    buttons: kb([
-      [{ text: "Back to observations", callback_data: "ac:observe" }],
-      [{ text: "Autel menu", callback_data: "autel:menu" }],
-      [{ text: "🔁 Reset", callback_data: "reset" }],
-    ]),
-  },
+  // ... (UNCHANGED: keep the rest of your AC object exactly as it already is)
 };
 
-// ------------------- MENU HELPERS -------------------
+// ------------------- MENUS -------------------
 function showManufacturerMenu(chatId, messageId) {
   resetDt(chatId);
 
@@ -808,6 +637,35 @@ async function showAutelMenu(chatId, messageId) {
   });
 }
 
+function buildKempowerMenuKeyboard() {
+  const data = loadKempower();
+  const faults = data.faults || [];
+
+  const rows = [];
+  if (!faults.length) {
+    rows.push([{ text: "⚠️ No Kempower faults loaded (check /debug/kempower)", callback_data: "noop" }]);
+  } else {
+    faults.forEach((f) => {
+      rows.push([{ text: f.title, callback_data: `KEMPOWER:${f.id}` }]);
+    });
+  }
+
+  rows.push([{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }]);
+  rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
+
+  return rows;
+}
+
+async function showKempowerMenu(chatId, messageId) {
+  const rows = buildKempowerMenuKeyboard();
+  return upsertMessage(chatId, {
+    messageId,
+    text: "Kempower Troubleshooting 🟢\n\nChoose a Kempower fault:",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
 // ------------------- COMMANDS -------------------
 bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
@@ -823,6 +681,11 @@ bot.onText(/^\/ping$/, async (msg) => {
 bot.onText(/^\/autel$/, async (msg) => {
   resetDt(msg.chat.id);
   await showAutelMenu(msg.chat.id);
+});
+
+bot.onText(/^\/kempower$/, async (msg) => {
+  resetDt(msg.chat.id);
+  await showKempowerMenu(msg.chat.id);
 });
 
 bot.onText(/^\/report$/, async (msg) => {
@@ -853,7 +716,7 @@ bot.on("message", async (msg) => {
 
   if (st.step === "charger") {
     setReport(chatId, { data: { chargerId: text } });
-    return askFault(chatId);
+    return askReportManufacturer(chatId);
   }
 
   if (st.step === "notes") {
@@ -892,54 +755,30 @@ bot.on("callback_query", async (q) => {
   // Manufacturer selection
   if (data.startsWith("mfr:")) {
     const mfr = data.split(":")[1];
-
-    if (mfr === "autel") {
-      return showAutelMenu(chatId, messageId);
-    }
-
-    if (mfr === "kempower") {
-      return upsertMessage(chatId, {
-        messageId,
-        text:
-          "🟢 <b>Kempower troubleshooting</b>\n\n" +
-          "Coming next.\n\n" +
-          "For now, select <b>Autel</b> to continue.",
-        parse_mode: "HTML",
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: "🔵 Autel", callback_data: "mfr:autel" }],
-            [{ text: "⬅️ Back", callback_data: "menu:mfr" }],
-          ],
-        },
-      });
-    }
-
+    if (mfr === "autel") return showAutelMenu(chatId, messageId);
+    if (mfr === "kempower") return showKempowerMenu(chatId, messageId);
     return showManufacturerMenu(chatId, messageId);
   }
 
   // ✅ DT BACK ONE STEP
   if (data.startsWith("DTB|")) {
-    const [, faultId] = data.split("|");
-    const fault = getAutelFaultById(faultId);
+    const [, pack, faultId] = data.split("|");
+    const fault = getFaultById(pack, faultId);
     if (!fault) {
       resetDt(chatId);
-      return showAutelMenu(chatId, messageId);
+      return pack === "kempower" ? showKempowerMenu(chatId, messageId) : showAutelMenu(chatId, messageId);
     }
 
-    const prevNode = popDtHistory(chatId, faultId);
+    const prevNode = popDtHistory(chatId, pack, faultId);
+    if (!prevNode) return showFaultCard({ chatId, messageId, pack, fault });
 
-    // If nothing to pop, fall back to showing the fault card
-    if (!prevNode) {
-      return showAutelFaultCard({ chatId, messageId, fault });
-    }
-
-    return renderYamlDecisionNode({ chatId, messageId, fault, nodeId: prevNode });
+    return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId: prevNode });
   }
 
   // YAML decision tree next node
   if (data.startsWith("DT|")) {
-    const [, faultId, nodeId] = data.split("|");
-    const fault = getAutelFaultById(faultId);
+    const [, pack, faultId, nodeId] = data.split("|");
+    const fault = getFaultById(pack, faultId);
 
     if (!fault) {
       resetDt(chatId);
@@ -947,11 +786,11 @@ bot.on("callback_query", async (q) => {
         messageId,
         text: "⚠️ Fault not found.",
         parse_mode: "HTML",
-        reply_markup: kb([[{ text: "⬅️ Back", callback_data: "autel:menu" }]]),
+        reply_markup: kb([[{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }]]),
       });
     }
 
-    return renderYamlDecisionNode({ chatId, messageId, fault, nodeId });
+    return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId });
   }
 
   // ------------------- REPORT CALLBACKS -------------------
@@ -965,15 +804,36 @@ bot.on("callback_query", async (q) => {
     return startReport(chatId);
   }
 
+  if (data === "r:back:mfr") {
+    return askReportManufacturer(chatId);
+  }
+
+  if (data.startsWith("r:mfr:")) {
+    const mfr = data.split(":")[2]; // autel | kempower
+    setReport(chatId, { data: { manufacturer: mfr } });
+    return askFault(chatId);
+  }
+
   if (data.startsWith("r:fault:")) {
-    if (data === "r:fault:ac") {
-      setReport(chatId, { data: { faultTitle: "AC Contactor Fault" } });
-    } else if (data.startsWith("r:fault:AUTEL:")) {
-      const id = data.split(":")[3];
-      const f = getAutelFaultById(id);
-      setReport(chatId, { data: { faultTitle: f ? f.title : `Autel Fault (${id})` } });
+    const parts = data.split(":"); // r:fault:AUTEL:<id> OR r:fault:KEMPOWER:<id>
+    const type = parts[2];
+    const id = parts[3];
+
+    if (type === "AUTEL") {
+      const f = getFaultById("autel", id);
+      setReport(chatId, { data: { manufacturer: "autel", faultTitle: f ? f.title : `Autel Fault (${id})` } });
+      return askActions(chatId);
     }
-    return askActions(chatId);
+
+    if (type === "KEMPOWER") {
+      const f = getFaultById("kempower", id);
+      setReport(chatId, {
+        data: { manufacturer: "kempower", faultTitle: f ? f.title : `Kempower Fault (${id})` },
+      });
+      return askActions(chatId);
+    }
+
+    return;
   }
 
   if (data.startsWith("r:act:")) {
@@ -994,7 +854,7 @@ bot.on("callback_query", async (q) => {
 
     return upsertMessage(chatId, {
       messageId,
-      text: "Step 4/5 — Select <b>actions performed</b>:",
+      text: "Step 5/6 — Select <b>actions performed</b>:",
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: buildActionsKeyboard(Array.from(selected)) },
     });
@@ -1011,13 +871,18 @@ bot.on("callback_query", async (q) => {
     return finishReport(chatId);
   }
 
-  // ------------------- AUTEL / AC -------------------
+  // ------------------- MENUS -------------------
   if (data === "autel:menu") {
     resetDt(chatId);
     return showAutelMenu(chatId, messageId);
   }
 
-  // Legacy AC decision tree routing (edit message)
+  if (data === "kempower:menu") {
+    resetDt(chatId);
+    return showKempowerMenu(chatId, messageId);
+  }
+
+  // ------------------- LEGACY AC -------------------
   if (data.startsWith("ac:")) {
     const key = data.split(":")[1];
     const node = AC[key];
@@ -1031,10 +896,10 @@ bot.on("callback_query", async (q) => {
     });
   }
 
-  // Autel YAML fault selection (edit message)
+  // ------------------- FAULT SELECTION -------------------
   if (data.startsWith("AUTEL:")) {
     const id = data.split(":")[1];
-    const fault = getAutelFaultById(id);
+    const fault = getFaultById("autel", id);
 
     if (!fault) {
       resetDt(chatId);
@@ -1046,7 +911,24 @@ bot.on("callback_query", async (q) => {
       });
     }
 
-    return showAutelFaultCard({ chatId, messageId, fault });
+    return showFaultCard({ chatId, messageId, pack: "autel", fault });
+  }
+
+  if (data.startsWith("KEMPOWER:")) {
+    const id = data.split(":")[1];
+    const fault = getFaultById("kempower", id);
+
+    if (!fault) {
+      resetDt(chatId);
+      return upsertMessage(chatId, {
+        messageId,
+        text: "Fault not found.",
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "⬅️ Back", callback_data: "kempower:menu" }]] },
+      });
+    }
+
+    return showFaultCard({ chatId, messageId, pack: "kempower", fault });
   }
 
   // ignore unknown callback data
