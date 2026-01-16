@@ -1,8 +1,8 @@
 # kempower.yml
-# EVBot Fault Pack: Kempower (On-site Technician v1) — Descriptive Merge (nodes-based)
+# EVBot Fault Pack: Kempower (On-site Technician v1) — Descriptive + Tuned (nodes-based)
 # Notes:
 # - Node-based decision tree: start_node + nodes map
-# - Each node has: prompt, options -> next (actions optional)
+# - Each node has: prompt, options -> next
 # - Keep IDs stable for deep links
 
 faults:
@@ -179,28 +179,24 @@ faults:
     tags: [ocpp, backend, comms, modem, sim, network]
 
     description: >
-      The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
-      If basic antenna/SIM checks don’t reveal anything, proceed to deeper network causes such as APN issues,
-      carrier outage/throttling, private IP/firewall blocks, and DNS/time sync problems.
+      The charger is offline to the backend (OCPP). Start with reboot/power cycle to recover modem registration.
+      If it remains offline, check antenna/SIM basics, then deeper network causes (APN, carrier outage, firewall blocks).
 
     likely_causes:
-      - Modem/SIM not registered on packet data (provisioning issue)
-      - Poor signal / damaged antenna / antenna connection loose
-      - Incorrect APN settings
-      - Carrier outage or throttling
-      - Backend firewall/whitelist blocking private IP ranges
-      - DNS or time sync issues affecting TLS/OCPP handshake
+      - Modem/SIM not registered on packet data
+      - Poor signal / antenna issue
+      - Incorrect APN
+      - Carrier outage/throttling
+      - Backend firewall/whitelist blocking traffic
 
     safety_notes:
-      - Many comms checks can be done without opening HV compartments
+      - Most checks can be performed without entering HV compartments
       - Follow ESD precautions if accessing comms hardware
-      - Comply with site rules when using hotspots or changing SIMs
 
     tools_required:
+      - Access to APN details / backend endpoint requirements
       - Known-good SIM (optional)
-      - Access to APN details and backend endpoint requirements
-      - Phone/laptop for hotspot test (if permitted)
-      - Basic hand tools (if comms compartment access required)
+      - Phone/laptop hotspot (if permitted)
 
     response:
       telegram_markdown: |
@@ -219,15 +215,15 @@ faults:
       nodes:
 
         C0:
-          prompt: >
+          prompt: |
             *Backend / OCPP offline*
-            Confirm offline state and proceed with basic recovery steps first.
+            Confirm offline state and proceed through recovery steps.
           options:
             - label: "Continue"
               next: C1
 
         C1:
-          prompt: >
+          prompt: |
             *Reboot / power cycle*
             Reboot and allow time for modem registration and backend handshake.
           options:
@@ -237,10 +233,9 @@ faults:
               next: C2
 
         C2:
-          prompt: >
+          prompt: |
             *Basic antenna / SIM checks*
             Inspect antenna condition/connection and confirm SIM is seated and serviceable.
-            If no obvious issue is found, proceed to deeper network checks.
           options:
             - label: "Issue found"
               next: C1
@@ -262,16 +257,16 @@ faults:
               next: ESCALATE_PACK
 
         ESCALATE_PACK:
-          prompt: >
+          prompt: |
             *Escalation pack — Backend/OCPP*
-            Provide: last known online time, signal strength (if available),
-            SIM/APN checks performed, and any comms-related logs/time stamps.
+            Include: last known online time, signal strength (if available),
+            SIM/APN checks, and timestamps/logs.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: >
+          prompt: |
             *Resolved — monitor*
             Confirm stable backend connection and monitor for dropouts.
           options:
@@ -294,23 +289,20 @@ faults:
 
     description: >
       An E-stop or safety interlock is active, preventing operation.
-      Start by checking all E-stops (including any remote or pedestal E-stops) and then verify doors/interlocks.
-      If nothing obvious is found, escalate with details of what was checked and any status indicators.
+      Start by checking all E-stops (including any remote/pedestal devices), then door/interlock switches.
 
     likely_causes:
-      - Local or remote E-stop engaged (including at dispensers/pedestals)
-      - Door interlock open or misaligned
+      - Local or remote E-stop engaged
+      - Door interlock open/misaligned
       - Safety loop wiring fault
-      - Interlock input fault / controller interpretation issue
+      - Interlock input fault / controller-side interpretation issue
 
     safety_notes:
-      - Treat any active safety chain as a stop condition until verified
-      - Follow site safety rules; do not bypass safety devices
-      - If cabinet access is required, follow LOTO requirements
+      - Do not bypass interlocks/E-stops
+      - Follow site safety rules; isolate if cabinet access is required
 
     tools_required:
       - Inspection light
-      - Basic hand tools for access panels (if required)
       - Multimeter (optional, for continuity checks if authorised)
 
     decision_tree:
@@ -318,17 +310,17 @@ faults:
       nodes:
 
         S0:
-          prompt: >
+          prompt: |
             *E-Stop / Interlock active*
-            Start with E-stop checks. Confirm all E-stops are released/reset.
+            Start with E-stop checks (including any remote/pedestal E-stops).
           options:
             - label: "Check E-Stops"
               next: S1
 
         S1:
-          prompt: >
+          prompt: |
             *Any E-Stop engaged?*
-            Confirm all E-stops (including any remote/pedestal) are reset.
+            Confirm all E-stops are reset/released.
           options:
             - label: "Yes"
               next: RESOLVED_TEST
@@ -336,10 +328,9 @@ faults:
               next: S2
 
         S2:
-          prompt: >
+          prompt: |
             *Check doors / interlocks*
-            Check door latches/interlock switches for alignment and proper closure.
-            Look for damaged actuators or loose wiring at the interlock switch.
+            Confirm all doors are closed and interlock switches are aligned and intact.
           options:
             - label: "Issue found"
               next: RESOLVED_TEST
@@ -347,17 +338,17 @@ faults:
               next: ESCALATE_PACK
 
         RESOLVED_TEST:
-          prompt: >
+          prompt: |
             *Resolved — test charger*
-            Clear the interlock condition and perform a functional test to confirm normal operation.
+            Clear the interlock condition, then perform a functional test.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         ESCALATE_PACK:
-          prompt: >
+          prompt: |
             *Escalation pack — Interlock*
-            Provide: which E-stops checked, door/interlock findings, and any status indicators/logs/time stamps.
+            Include: which E-stops checked, door/interlock findings, and timestamps/logs.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
@@ -377,25 +368,22 @@ faults:
     tags: [imd, insulation, earth_leakage, safety]
 
     description: >
-      Insulation Monitoring Device (IMD) fault indicates potential insulation breakdown between HV conductors
-      and earth. Common field triggers include moisture ingress in connectors/cables, damaged insulation,
-      contamination, or internal component faults. Treat this as a high-risk safety condition.
+      IMD/insulation fault indicates potential insulation breakdown between HV conductors and earth.
+      Treat as safety-critical. Common field triggers include moisture ingress in connectors/cables or damaged insulation.
 
     likely_causes:
-      - Moisture/water ingress in the connector or cable head
+      - Moisture/water ingress in connector or cable head
       - Damaged DC cable insulation or crushed conductors
       - Contamination (conductive dirt/salt) causing leakage paths
       - Internal insulation breakdown within charger components
 
     safety_notes:
       - Do not continue charging if insulation risk is suspected
-      - Follow LOTO before inspecting cables/connectors
-      - Do not bypass safety protections; escalate if not clearly resolved
-      - If moisture/ingress is present, treat as STOP condition
+      - LOTO before inspecting cables/connectors
+      - If moisture/ingress is present, treat as STOP condition and escalate
 
     tools_required:
       - Inspection light
-      - Basic hand tools (if access required)
       - Megger/insulation tester (only if authorised and procedure allows)
 
     decision_tree:
@@ -403,17 +391,17 @@ faults:
       nodes:
 
         I0:
-          prompt: >
+          prompt: |
             *IMD / insulation fault detected*
-            Begin with cable/connector inspection for moisture or damage.
+            Start with cable/connector inspection for moisture or damage.
           options:
             - label: "Inspect connector/cable"
               next: I1
 
         I1:
-          prompt: >
+          prompt: |
             *Moisture or damage present?*
-            If any damage/ingress is found, STOP and escalate—this is a safety-critical condition.
+            If any damage/ingress is found, STOP and escalate (safety-critical).
           options:
             - label: "Yes"
               next: STOP_DAMAGE
@@ -421,9 +409,9 @@ faults:
               next: I2
 
         I2:
-          prompt: >
+          prompt: |
             *Reboot & re-test*
-            After confirming no visible damage/ingress, reboot and re-test to confirm whether the fault clears.
+            If no visible damage/ingress, reboot and re-test to confirm whether it clears.
           options:
             - label: "Cleared"
               next: RESOLVED_MONITOR
@@ -431,9 +419,9 @@ faults:
               next: ESCALATE_PACK
 
         STOP_DAMAGE:
-          prompt: >
+          prompt: |
             *STOP — insulation risk*
-            Do not proceed. Escalate with photos of cable/connector and any environmental conditions.
+            Do not proceed. Escalate with photos of cable/connector and site conditions.
           options:
             - label: "Escalate"
               next: ESCALATE_PACK
@@ -441,18 +429,17 @@ faults:
               next: MENU_KEMPOWER
 
         ESCALATE_PACK:
-          prompt: >
+          prompt: |
             *Escalation pack — IMD*
-            Provide: photos of connector/cable, moisture/contamination observations, site conditions (rain, wash-down),
-            and event logs/time stamps.
+            Include: photos, moisture/contamination observations, weather/site conditions, and timestamps/logs.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: >
+          prompt: |
             *Resolved — monitor closely*
-            Run a test session and monitor closely for recurrence. If it returns, escalate.
+            Run a test session and monitor closely. If it returns, escalate.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
@@ -472,9 +459,8 @@ faults:
     tags: [cooling, fans, filters, airflow]
 
     description: >
-      Overtemperature or cooling fault indicates the charger is exceeding thermal limits or has detected
-      inadequate airflow. The most common field cause is blocked filters/vents. Fan failures and poor cabinet
-      ventilation can also trigger this fault, especially in hot ambient conditions.
+      Overtemperature/cooling fault indicates the unit is exceeding thermal limits or airflow is insufficient.
+      Most common field cause is blocked filters/vents. Fan faults or poor ventilation can also trigger it.
 
     likely_causes:
       - Dirty filters or blocked vents restricting airflow
@@ -484,12 +470,11 @@ faults:
 
     safety_notes:
       - Start with external airflow/filter checks where possible
-      - Follow LOTO requirements for any internal fan inspection or access
-      - Avoid operating the unit under load until cooling is confirmed normal
+      - Follow LOTO requirements for internal inspection
 
     tools_required:
       - Inspection light
-      - Basic hand tools for filter access panels (if required)
+      - Basic hand tools for filter access (if required)
       - IR thermometer (optional)
 
     decision_tree:
@@ -497,15 +482,15 @@ faults:
       nodes:
 
         T0:
-          prompt: >
+          prompt: |
             *Overtemperature / cooling fault*
-            Start with airflow checks and filter condition. This is the most common field cause.
+            Start with airflow checks and filter condition.
           options:
             - label: "Check airflow"
               next: T1
 
         T1:
-          prompt: >
+          prompt: |
             *Filters dirty / vents blocked?*
             Inspect filters and vents for dust buildup and blockage.
           options:
@@ -515,7 +500,7 @@ faults:
               next: ESCALATE_PACK
 
         FIX_FILTERS:
-          prompt: >
+          prompt: |
             *Clean filters & vents*
             Clean/replace filters and clear vents, then re-test under load.
           options:
@@ -523,15 +508,15 @@ faults:
               next: RESOLVED_MONITOR
 
         ESCALATE_PACK:
-          prompt: >
+          prompt: |
             *Escalation pack — Cooling*
-            Escalate with ambient conditions, fan operation observations, and any temperature readings/logs.
+            Include: ambient conditions, fan observations, and any temperature/log readings.
           options:
             - label: "Kempower menu"
               next: MENU_KEMPOWER
 
         RESOLVED_MONITOR:
-          prompt: >
+          prompt: |
             *Resolved — monitor*
             Confirm temperatures stabilise within normal range during a test session.
           options:

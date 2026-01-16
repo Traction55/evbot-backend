@@ -1,8 +1,8 @@
 # autel.yml
-# EVBot Fault Pack: Autel (On-site Technician v1) — Descriptive Merge (nodes-based)
+# EVBot Fault Pack: Autel (On-site Technician v1) — Descriptive + Tuned (nodes-based)
 # Notes:
 # - Node-based decision tree: start_node + nodes map
-# - Each node has: prompt, options -> next (actions optional)
+# - Each node has: prompt, options -> next
 # - Keep IDs stable so your bot can deep-link
 
 faults:
@@ -26,6 +26,7 @@ faults:
         - "contactor feedback"
         - "input contactor"
         - "main contactor"
+
     severity: high
     tags: [power, input, contactor, interlock, feedback, three_phase]
 
@@ -228,7 +229,6 @@ faults:
               next: __MENU_AUTEL__
 
 
-
   - id: autel_dc_contactor_fault
     platform: autel
     charger_type: dc
@@ -238,34 +238,31 @@ faults:
 
     description: >
       The charger is unable to close or verify the DC output contactor.
-      This can be caused by interlocks, missing coil command, undervoltage/PSU issues,
+      Most causes are interlock inhibits, missing coil command, undervoltage/PSU issues,
       wiring faults, auxiliary feedback issues, or a failed/welded contactor.
 
     likely_causes:
-      - No coil command from controller (logic inhibit / controller fault)
       - Interlock preventing closure
-      - Coil wiring fault or loose terminals
+      - No coil command from controller
+      - Coil wiring/terminals loose or damaged
       - PSU undervoltage or voltage sag at pull-in
       - Failed or welded DC contactor / feedback fault
 
     safety_notes:
-      - DC contactors are HV components; follow LOTO and verify discharge state
-      - Wait minimum 5 minutes after isolation for DC bus discharge
-      - Use appropriate PPE and confirm absence of voltage before touching conductors
+      - LOTO before cabinet access; wait minimum 5 minutes for DC bus discharge
+      - Verify safe state before touching DC contactor/DC bus components
 
     tools_required:
       - Multimeter (true RMS preferred)
-      - Insulated tools
-      - Clamp meter (optional)
-      - Torque driver (if specified by OEM)
+      - Insulated hand tools
 
     decision_tree:
       start_node: D0
       nodes:
         D0:
-          prompt: >
+          prompt: |
             *DC Contactor Fault — Start*
-            Confirm whether the fault is active now or intermittent.
+            Is the fault active right now, or intermittent?
           options:
             - label: "Fault active"
               next: D1
@@ -273,10 +270,9 @@ faults:
               next: D2
 
         D1:
-          prompt: >
+          prompt: |
             *Power cycle and observe*
-            Power cycle and observe contactor behaviour. You’re proving whether it closes reliably
-            and whether the fault clears or persists.
+            Power cycle and observe contactor behaviour (close attempt, pull-in, and whether the fault clears).
           options:
             - label: "Cleared"
               next: MONITOR
@@ -286,19 +282,18 @@ faults:
               next: D6
 
         D2:
-          prompt: >
+          prompt: |
             *Intermittent behaviour*
-            Intermittent faults are often loose wiring, thermal movement, or supply/PSU sag.
-            Continue through checks to isolate the root cause.
+            Intermittent faults are often loose wiring, thermal movement, or PSU/supply sag. Continue through checks.
           options:
             - label: "Continue"
               next: D1
 
         D3:
-          prompt: >
+          prompt: |
             *Check coil voltage*
             Measure whether coil voltage is present during the close command.
-            This tells you whether it’s a command issue or a contactor/mechanical issue.
+            This tells you if it’s a command/inhibit issue vs contactor/mechanical failure.
           options:
             - label: "No voltage"
               next: D4
@@ -308,10 +303,9 @@ faults:
               next: FIX_PSU
 
         D4:
-          prompt: >
+          prompt: |
             *No coil command*
-            No coil voltage indicates an inhibit condition, interlock open, wiring issue,
-            or controller output fault.
+            No coil voltage typically points to an interlock inhibit, wiring issue, or controller output fault.
           options:
             - label: "Interlock"
               next: FIX_INTERLOCK
@@ -321,10 +315,9 @@ faults:
               next: ESCALATE_AUTEL
 
         D6:
-          prompt: >
-            *Aux feedback*
-            If it closes but faults, check the auxiliary feedback circuit and whether the contactor
-            may be welded or not reporting state change correctly.
+          prompt: |
+            *Aux feedback / verification*
+            If it closes but faults, check auxiliary feedback circuit or welded contactor condition.
           options:
             - label: "Feedback fault"
               next: FIX_AUX_FEEDBACK
@@ -332,58 +325,55 @@ faults:
               next: REPLACE_CONTACTOR
 
         FIX_PSU:
-          prompt: >
-            *Fix PSU*
-            Address undervoltage and control power stability. Confirm stable voltage during pull-in.
+          prompt: |
+            *Fix PSU / undervoltage*
+            Address control power stability and confirm voltage holds during pull-in. Then re-test.
           options:
             - label: "Re-test"
               next: D1
 
         FIX_INTERLOCK:
-          prompt: >
+          prompt: |
             *Fix interlock*
-            Identify the open interlock (door, E-stop chain, safety loop) and restore continuity.
+            Identify the open interlock (door, E-stop chain, safety loop) and restore continuity. Then re-test.
           options:
             - label: "Re-test"
               next: D1
 
         FIX_WIRING:
-          prompt: >
+          prompt: |
             *Fix wiring*
-            Repair/secure wiring to the contactor coil and feedback circuits. Check for heat damage
-            and loose terminals.
+            Repair/secure coil wiring and harness connections (loose terminals, heat damage). Then re-test.
           options:
             - label: "Re-test"
               next: D1
 
         FIX_AUX_FEEDBACK:
-          prompt: >
+          prompt: |
             *Fix aux feedback*
-            Repair/secure auxiliary feedback wiring and confirm state change.
+            Repair/secure auxiliary feedback wiring and confirm state change. Then re-test.
           options:
             - label: "Re-test"
               next: D1
 
         REPLACE_CONTACTOR:
-          prompt: >
+          prompt: |
             *Replace DC contactor*
-            If coil voltage is present and it won’t close reliably, replacement is indicated.
-            Perform functional test after replacement.
+            Coil voltage present but unreliable/no operation = likely failed/welded contactor. Replace and function test.
           options:
             - label: "Re-test"
               next: D1
 
         ESCALATE_AUTEL:
-          prompt: >
+          prompt: |
             *Escalate to Autel*
-            Escalate with coil voltage findings, interlock status, wiring checks performed,
-            and relevant logs/time stamps.
+            Include: coil voltage findings, interlock status, wiring checks performed, and timestamps/logs.
           options:
             - label: "Back"
               next: D0
 
         MONITOR:
-          prompt: >
+          prompt: |
             *Monitor*
             Run a test session and monitor for recurrence.
           options:
@@ -399,41 +389,40 @@ faults:
     tags: [ocpp, backend, comms, modem, sim, network]
 
     description: >
-      The charger is offline to the backend (OCPP). This can be caused by modem/SIM issues,
-      APN misconfiguration, carrier outage/throttling, DNS/time sync problems, or a backend
-      firewall/whitelist issue blocking traffic.
+      The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
+      If basic recovery fails, investigate SIM/APN, carrier/signal issues, DNS/time sync, and backend firewall/whitelisting.
 
     likely_causes:
-      - Charger not registered on packet data (SIM / carrier provisioning)
-      - Incorrect APN or APN credentials
-      - Carrier outage, poor signal, or throttling
-      - DNS resolution failure or time sync drift affecting TLS/OCPP
+      - SIM not registered on packet data / provisioning issue
+      - Incorrect APN settings
+      - Carrier outage/throttling or poor signal/antenna issue
+      - DNS or time sync issues affecting TLS/OCPP handshake
       - Backend firewall/whitelist blocking private IP ranges
 
     safety_notes:
-      - Network checks can often be performed without opening HV compartments
-      - Follow site access and ESD precautions if accessing comms hardware
+      - Most checks are low risk and can be done without entering HV compartments
+      - Follow ESD precautions if accessing comms hardware
 
     tools_required:
       - Phone/laptop for hotspot testing (if permitted)
-      - Access to APN details / backend requirements
-      - SIM tool / spare SIM (optional)
+      - Access to APN/back-end requirements
+      - Known-good SIM (optional)
 
     decision_tree:
       start_node: C0
       nodes:
         C0:
-          prompt: >
+          prompt: |
             *Backend / OCPP offline*
-            Confirm the charger is offline and proceed through basic recovery steps first.
+            Confirm offline state and proceed with recovery steps.
           options:
             - label: "Continue"
               next: C1
 
         C1:
-          prompt: >
+          prompt: |
             *Reboot charger*
-            Reboot and allow sufficient time for modem registration and OCPP handshake.
+            Reboot and allow time for modem registration and OCPP handshake.
           options:
             - label: "Online"
               next: MONITOR
@@ -441,9 +430,9 @@ faults:
               next: C2
 
         C2:
-          prompt: >
-            *Basic checks exhausted*
-            If reboot doesn’t restore comms, escalate or proceed with advanced checks (SIM/APN/network/DNS/time).
+          prompt: |
+            *Next step*
+            If reboot did not restore comms, either escalate or perform advanced SIM/network checks.
           options:
             - label: "📈 Escalate (standard)"
               next: ESCALATE_AUTEL
@@ -453,7 +442,7 @@ faults:
         ADVANCED_SIM_NETWORK:
           prompt: |
             🧠 *Deep Dive — SIM / Network / OCPP*
-            Advanced causes to check:
+            Check these advanced causes:
             • SIM registered on GSM only (no packet data)
             • Incorrect APN
             • Carrier outage or throttling
@@ -466,16 +455,16 @@ faults:
               next: ESCALATE_AUTEL
 
         ESCALATE_AUTEL:
-          prompt: >
+          prompt: |
             *Escalate backend / OCPP*
-            Escalate with: last known online time, signal strength (if available),
-            SIM/APN checks, and any logged comms errors.
+            Include: last known online time, signal strength (if available),
+            SIM/APN checks, and any comms errors/log timestamps.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
         MONITOR:
-          prompt: >
+          prompt: |
             *Monitor*
             Confirm stable backend connection and monitor for dropouts.
           options:
@@ -492,38 +481,38 @@ faults:
 
     description: >
       Overtemperature indicates the charger is exceeding thermal limits or has detected inadequate cooling.
-      This is commonly caused by blocked airflow (dirty filters), failed fans, poor ventilation, or high ambient temperature.
+      Most common field cause is blocked airflow (dirty filters/vents). Fan faults or poor ventilation can also trigger it.
 
     likely_causes:
-      - Dirty or blocked air filters / intake vents
-      - Failed or obstructed fans
-      - Poor ventilation around cabinet (recirculation)
+      - Dirty/blocked filters or intake vents
+      - Fan failure or obstruction
+      - Poor cabinet ventilation / recirculation
       - High ambient temperature / direct sun load
 
     safety_notes:
-      - Some checks can be performed externally (filters/airflow) before opening cabinet
-      - Follow site safety and LOTO requirements for any internal inspection
+      - Start with external airflow/filter checks where possible
+      - Follow LOTO requirements for internal fan inspection
 
     tools_required:
-      - Basic hand tools for filter access panels (if required)
       - Torch / inspection light
+      - Basic hand tools for filter access (if required)
       - IR thermometer (optional)
 
     decision_tree:
       start_node: T0
       nodes:
         T0:
-          prompt: >
+          prompt: |
             *Overtemperature detected*
-            Start with airflow checks and filter condition. This is the most common field cause.
+            Start with airflow checks and filter condition.
           options:
             - label: "Check airflow"
               next: T1
 
         T1:
-          prompt: >
+          prompt: |
             *Filters dirty?*
-            Inspect filters and intake vents for blockage.
+            Inspect filters/vents for blockage.
           options:
             - label: "Yes"
               next: FIX_FILTERS
@@ -531,25 +520,25 @@ faults:
               next: ESCALATE_AUTEL
 
         FIX_FILTERS:
-          prompt: >
+          prompt: |
             *Clean filters*
-            Clean/replace filters as per site maintenance standard, then re-test under load.
+            Clean/replace filters, then re-test under load.
           options:
             - label: "Re-test"
               next: MONITOR
 
         ESCALATE_AUTEL:
-          prompt: >
+          prompt: |
             *Escalate thermal fault*
-            Escalate with ambient conditions, fan operation observations, and any temperature readings/logs.
+            Include: ambient conditions, fan operation observations, and any temp/log readings.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
         MONITOR:
-          prompt: >
+          prompt: |
             *Monitor*
-            Run a test session and confirm temperatures stabilise within normal range.
+            Run a test session and monitor for recurrence.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
@@ -563,39 +552,39 @@ faults:
     tags: [power_module, rectifier, dc_bus, comms, cooling]
 
     description: >
-      A power module is offline or reporting a fault. This is often caused by a loose module seating,
-      internal comms faults, cooling issues, or a failed module. Start with reseating and basic verification.
+      A power module is offline or reporting a module fault. Start with reseating to rule out poor seating or connection.
+      If it remains offline, suspect module failure, cooling trip, or controller/comms issue.
 
     likely_causes:
       - Module not seated correctly / loose connections
-      - Internal comms fault between modules and controller
-      - Cooling issue causing module to trip
-      - Failed power module requiring replacement
+      - Internal comms issue between module and controller
+      - Cooling-related trip (fan/airflow/filter)
+      - Failed power module
 
     safety_notes:
-      - Follow LOTO and discharge wait times before accessing module bays
-      - Modules may retain charge; confirm safe state before handling
+      - LOTO before access; wait minimum 5 minutes for DC bus discharge
+      - Verify safe state before handling modules
 
     tools_required:
-      - Basic hand tools for access panels
-      - Inspection light
-      - Multimeter (for verification as needed)
+      - Torch / inspection light
+      - Basic hand tools for access
+      - Multimeter (as needed)
 
     decision_tree:
       start_node: P0
       nodes:
         P0:
-          prompt: >
+          prompt: |
             *Power module offline*
-            Reseat the affected module to rule out poor seating or connection.
+            Reseat the affected module to rule out poor seating/connection.
           options:
             - label: "Reseat module"
               next: P1
 
         P1:
-          prompt: >
+          prompt: |
             *Re-test*
-            Re-test after reseating and confirm whether the module returns online.
+            Confirm whether the module returns online after reseat.
           options:
             - label: "Resolved"
               next: MONITOR
@@ -603,17 +592,17 @@ faults:
               next: ESCALATE_AUTEL
 
         ESCALATE_AUTEL:
-          prompt: >
+          prompt: |
             *Escalate power module*
-            Escalate with module ID/slot position, any LEDs/error codes, and actions performed.
+            Include: module ID/slot, any LEDs/error codes, actions taken (reseat), and timestamps/logs.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
         MONITOR:
-          prompt: >
+          prompt: |
             *Monitor*
-            Run a test session and confirm stable operation across all modules.
+            Run a test session and confirm stable module operation.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
