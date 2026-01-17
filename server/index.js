@@ -12,6 +12,11 @@
  * - Added optional "Upload photos" step (silent capture, referenced as attachments count)
  * - Report fields: Site name, Asset ID, Tech name, Client reference / ticket #
  *
+ * New additions (Images):
+ * - Serves static images from /images -> assets/images
+ * - YAML decision_tree node can include: image: autel/ac_contactor_location
+ *   and bot will sendPhoto(PUBLIC_URL/images/autel/ac_contactor_location.jpg)
+ *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
  *   PUBLIC_URL=https://your-railway-domain.up.railway.app
@@ -44,7 +49,8 @@ function normalizePublicUrl(raw) {
 }
 
 const PUBLIC_URL = normalizePublicUrl(
-  process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? process.env.RAILWAY_PUBLIC_DOMAIN : "")
+  process.env.PUBLIC_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? process.env.RAILWAY_PUBLIC_DOMAIN : "")
 );
 
 // Force mode via USE_WEBHOOK (prevents local code from accidentally breaking prod webhook)
@@ -126,6 +132,26 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ✅ STATIC IMAGES
+// Maps /images/... -> ../assets/images/...
+const IMAGES_DIR = path.join(__dirname, "..", "assets", "images");
+app.use("/images", express.static(IMAGES_DIR));
+
+// ✅ DEBUG: show what the server thinks the images folder is
+app.get("/debug/images-dir", (req, res) => {
+  let files = [];
+  try {
+    const autelDir = path.join(IMAGES_DIR, "autel");
+    files = fs.existsSync(autelDir) ? fs.readdirSync(autelDir) : [];
+  } catch (e) {}
+  res.json({
+    IMAGES_DIR,
+    exists: fs.existsSync(IMAGES_DIR),
+    autelDirExists: fs.existsSync(path.join(IMAGES_DIR, "autel")),
+    autelFiles: files,
+  });
+});
+
 app.get("/", (req, res) => res.send("EVBot OK"));
 app.get("/health", (req, res) =>
   res.json({
@@ -136,6 +162,7 @@ app.get("/health", (req, res) =>
     webhook: WEBHOOK_URL || null,
     useWebhookEnv: USE_WEBHOOK,
     secretEnabled: !!TELEGRAM_WEBHOOK_SECRET,
+    imagesDir: IMAGES_DIR,
   })
 );
 
@@ -157,6 +184,17 @@ app.get("/debug/kempower", (req, res) => {
     exists: fs.existsSync(KEMPOWER_FILE),
     count: data.faults.length,
     titles: data.faults.slice(0, 30).map((f) => f.title),
+  });
+});
+
+// Optional: verify image file exists via API
+app.get("/debug/images", (req, res) => {
+  const rel = String(req.query.path || "");
+  const full = path.join(IMAGES_DIR, rel);
+  res.json({
+    query: rel,
+    full,
+    exists: rel ? fs.existsSync(full) : null,
   });
 });
 
@@ -206,6 +244,41 @@ async function upsertMessage(chatId, opts) {
     }
   }
   return bot.sendMessage(chatId, text, { parse_mode, reply_markup });
+}
+
+/**
+ * If node has image, we must sendPhoto().
+ * Editing an existing text message into a photo is not possible, so we:
+ * - try editMessageCaption if it was already a photo (may fail)
+ * - otherwise sendPhoto as a fresh message
+ */
+async function upsertPhotoOrText(chatId, opts) {
+  const { messageId, text, parse_mode, reply_markup, imageUrl } = opts;
+
+  if (imageUrl) {
+    // Attempt to edit caption first (only works if prior message is a photo)
+    if (messageId) {
+      try {
+        await bot.editMessageCaption(text, {
+          chat_id: chatId,
+          message_id: messageId,
+          parse_mode,
+          reply_markup,
+        });
+        return;
+      } catch (_) {
+        // fall through to sendPhoto
+      }
+    }
+
+    return bot.sendPhoto(chatId, imageUrl, {
+      caption: text,
+      parse_mode,
+      reply_markup,
+    });
+  }
+
+  return upsertMessage(chatId, { chatId, messageId, text, parse_mode, reply_markup });
 }
 
 // ------------------- STATE -------------------
@@ -346,6 +419,34 @@ async function showFaultCard({ chatId, messageId, pack, fault }) {
   });
 }
 
+function imageKeyToUrl(imageKey) {
+  // YAML: image: autel/ac_contactor_location   (no extension)
+  // Will serve whichever exists: .png, .jpg, .jpeg, .webp
+  if (!imageKey) return "";
+
+  const key = String(imageKey).trim().replace(/^\/+/, "");
+  const relBase = key.replace(/^\/*/, ""); // e.g. "autel/ac_contactor_location"
+
+  // If YAML already includes an extension, respect it
+  const hasExt = /\.[a-z0-9]+$/i.test(relBase);
+  const candidates = hasExt
+    ? [relBase]
+    : [`${relBase}.png`, `${relBase}.jpg`, `${relBase}.jpeg`, `${relBase}.webp`];
+
+  // If we can check local filesystem, pick the first that exists
+  for (const rel of candidates) {
+    const localPath = path.join(IMAGES_DIR, rel);
+    if (fs.existsSync(localPath)) {
+      // Telegram needs a public URL to fetch
+      return PUBLIC_URL ? `${PUBLIC_URL}/images/${rel}` : "";
+    }
+  }
+
+  // Fall back (if nothing exists)
+  return PUBLIC_URL ? `${PUBLIC_URL}/images/${candidates[0]}` : "";
+}
+
+
 async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }) {
   const tree = fault?.decision_tree;
   const node = tree?.nodes?.[nodeId];
@@ -385,11 +486,25 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
     },
   ]);
 
-  return upsertMessage(chatId, {
+  const imageUrl = node.image ? imageKeyToUrl(node.image) : "";
+
+  // If node has image but PUBLIC_URL is blank, we still show text (local)
+  if (node.image && !imageUrl) {
+    return upsertMessage(chatId, {
+      messageId,
+      text: `${text}\n\n⚠️ (Image available, but PUBLIC_URL is blank so Telegram can’t fetch it in this mode.)`,
+      parse_mode: "Markdown",
+      reply_markup: kb(rows),
+    });
+  }
+
+  // Prefer photo when image is defined
+  return upsertPhotoOrText(chatId, {
     messageId,
     text,
     parse_mode: "Markdown",
     reply_markup: kb(rows),
+    imageUrl: imageUrl || "",
   });
 }
 
@@ -668,7 +783,6 @@ async function askNotes(chatId) {
 async function finishReport(chatId) {
   const st = reportState.get(chatId);
   const data = st?.data || {};
-
   const reportText = formatReportHtml(data);
 
   setReport(chatId, { step: "done" });
@@ -1100,6 +1214,7 @@ app.listen(PORT, "0.0.0.0", async () => {
   console.log(`PUBLIC_URL: ${PUBLIC_URL || "(blank)"}`);
   console.log(`WEBHOOK_URL: ${WEBHOOK_URL || "(blank)"}`);
   console.log(`USE_WEBHOOK env: ${USE_WEBHOOK}`);
+  console.log(`Images: /images -> ${IMAGES_DIR}`);
 
   if (useWebhook) {
     try {
