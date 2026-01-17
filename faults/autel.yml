@@ -3,7 +3,7 @@
 # Notes:
 # - Node-based decision tree: start_node + nodes map
 # - Each node has: prompt, options -> next
-# - Keep IDs stable so your bot can deep-link
+# - image: autel/<filename_without_extension> (expects files in assets/images/autel/*.png)
 
 faults:
 
@@ -97,6 +97,7 @@ faults:
           prompt: |
             *Power cycle & check pull-in*
             Power cycle and listen/observe: does the AC contactor pull in cleanly?
+          image: autel/ac_contactor_location
           options:
             - label: "Cleared"
               next: MONITOR
@@ -112,6 +113,7 @@ faults:
             *No pull-in*
             Work out whether it’s being *blocked* (interlock), *not commanded* (no coil voltage),
             or *failed* (coil voltage present but no pull-in).
+          image: autel/interlock_chain_points
           options:
             - label: "Interlock open"
               next: FIX_INTERLOCK
@@ -124,6 +126,7 @@ faults:
           prompt: |
             *Chatter / weak pull-in*
             Usually undervoltage (supply sag / weak control PSU) or a failing contactor.
+          image: autel/control_psu_location
           options:
             - label: "Voltage sag"
               next: FIX_PSU_OR_SUPPLY
@@ -134,6 +137,7 @@ faults:
           prompt: |
             *Clunks but fault remains*
             Contactor may be moving, but the system can’t verify it. Focus on aux feedback circuit.
+          image: autel/aux_feedback_terminals
           options:
             - label: "Feedback fault"
               next: FIX_AUX_FEEDBACK
@@ -144,6 +148,7 @@ faults:
           prompt: |
             *No coil command*
             No coil voltage typically points to PSU undervoltage, an open interlock, wiring break, or controller output issue.
+          image: autel/control_psu_location
           options:
             - label: "PSU / undervoltage"
               next: FIX_PSU_OR_SUPPLY
@@ -176,6 +181,7 @@ faults:
           prompt: |
             *Fix interlock*
             Identify which interlock is open (door, E-stop chain, safety loop) and restore continuity. Then re-test.
+          image: autel/interlock_chain_points
           options:
             - label: "Re-test"
               next: A3
@@ -184,6 +190,7 @@ faults:
           prompt: |
             *Fix aux feedback*
             Repair/secure aux feedback wiring and confirm state change during pull-in/pull-out. Then re-test.
+          image: autel/aux_feedback_terminals
           options:
             - label: "Re-test"
               next: A3
@@ -192,6 +199,7 @@ faults:
           prompt: |
             *Fix PSU / undervoltage*
             Address control PSU undervoltage or supply sag during pull-in (connections, PSU health, upstream quality). Then re-test.
+          image: autel/control_psu_location
           options:
             - label: "Re-test"
               next: A3
@@ -208,6 +216,7 @@ faults:
           prompt: |
             *Replace AC contactor*
             Coil voltage present but no reliable pull-in = likely failed contactor. Replace and function test.
+          image: autel/ac_contactor_location
           options:
             - label: "Re-test"
               next: A3
@@ -273,6 +282,7 @@ faults:
           prompt: |
             *Power cycle and observe*
             Power cycle and observe contactor behaviour (close attempt, pull-in, and whether the fault clears).
+          image: autel/dc_contactor_location
           options:
             - label: "Cleared"
               next: MONITOR
@@ -294,6 +304,7 @@ faults:
             *Check coil voltage*
             Measure whether coil voltage is present during the close command.
             This tells you if it’s a command/inhibit issue vs contactor/mechanical failure.
+          image: autel/dc_contactor_location
           options:
             - label: "No voltage"
               next: D4
@@ -306,6 +317,7 @@ faults:
           prompt: |
             *No coil command*
             No coil voltage typically points to an interlock inhibit, wiring issue, or controller output fault.
+          image: autel/interlock_chain_points
           options:
             - label: "Interlock"
               next: FIX_INTERLOCK
@@ -318,6 +330,7 @@ faults:
           prompt: |
             *Aux feedback / verification*
             If it closes but faults, check auxiliary feedback circuit or welded contactor condition.
+          image: autel/aux_feedback_terminals
           options:
             - label: "Feedback fault"
               next: FIX_AUX_FEEDBACK
@@ -328,6 +341,7 @@ faults:
           prompt: |
             *Fix PSU / undervoltage*
             Address control power stability and confirm voltage holds during pull-in. Then re-test.
+          image: autel/control_psu_location
           options:
             - label: "Re-test"
               next: D1
@@ -336,6 +350,7 @@ faults:
           prompt: |
             *Fix interlock*
             Identify the open interlock (door, E-stop chain, safety loop) and restore continuity. Then re-test.
+          image: autel/interlock_chain_points
           options:
             - label: "Re-test"
               next: D1
@@ -352,6 +367,7 @@ faults:
           prompt: |
             *Fix aux feedback*
             Repair/secure auxiliary feedback wiring and confirm state change. Then re-test.
+          image: autel/aux_feedback_terminals
           options:
             - label: "Re-test"
               next: D1
@@ -360,6 +376,7 @@ faults:
           prompt: |
             *Replace DC contactor*
             Coil voltage present but unreliable/no operation = likely failed/welded contactor. Replace and function test.
+          image: autel/dc_contactor_location
           options:
             - label: "Re-test"
               next: D1
@@ -505,6 +522,7 @@ faults:
           prompt: |
             *Overtemperature detected*
             Start with airflow checks and filter condition.
+          image: autel/cooling_filters_location
           options:
             - label: "Check airflow"
               next: T1
@@ -513,16 +531,38 @@ faults:
           prompt: |
             *Filters dirty?*
             Inspect filters/vents for blockage.
+          image: autel/cooling_filters_location
           options:
             - label: "Yes"
               next: FIX_FILTERS
             - label: "No"
-              next: ESCALATE_AUTEL
+              next: T2
+
+        T2:
+          prompt: |
+            *Check cooling fans*
+            Confirm fans run freely, no obstructions, and airflow direction is correct.
+          image: autel/cooling_fan_location
+          options:
+            - label: "Fans OK"
+              next: MONITOR
+            - label: "Fan not running / blocked"
+              next: FIX_FANS
 
         FIX_FILTERS:
           prompt: |
             *Clean filters*
             Clean/replace filters, then re-test under load.
+          image: autel/cooling_filters_location
+          options:
+            - label: "Re-test"
+              next: T2
+
+        FIX_FANS:
+          prompt: |
+            *Fix fan issue*
+            Clear obstruction, check fan power/connector, replace fan if failed. Then re-test.
+          image: autel/cooling_fan_location
           options:
             - label: "Re-test"
               next: MONITOR
@@ -530,7 +570,7 @@ faults:
         ESCALATE_AUTEL:
           prompt: |
             *Escalate thermal fault*
-            Include: ambient conditions, fan operation observations, and any temp/log readings.
+            Include: ambient conditions, fan operation observations, filter condition, and any temp/log readings.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
@@ -589,12 +629,54 @@ faults:
             - label: "Resolved"
               next: MONITOR
             - label: "Still offline"
+              next: P2
+
+        P2:
+          prompt: |
+            *Check cooling basics*
+            If modules are tripping offline, confirm airflow/filters and fans are OK.
+          image: autel/cooling_filters_location
+          options:
+            - label: "Filters / airflow OK"
               next: ESCALATE_AUTEL
+            - label: "Filters dirty"
+              next: FIX_FILTERS
+            - label: "Check fans"
+              next: CHECK_FANS
+
+        CHECK_FANS:
+          prompt: |
+            *Check cooling fans*
+            Confirm fans are operating and unobstructed.
+          image: autel/cooling_fan_location
+          options:
+            - label: "Fans OK"
+              next: ESCALATE_AUTEL
+            - label: "Fan issue"
+              next: FIX_FANS
+
+        FIX_FILTERS:
+          prompt: |
+            *Clean filters*
+            Clean/replace filters then re-test module stability under load.
+          image: autel/cooling_filters_location
+          options:
+            - label: "Re-test"
+              next: P1
+
+        FIX_FANS:
+          prompt: |
+            *Fix fan issue*
+            Clear obstruction, check connectors, replace fan if failed. Then re-test.
+          image: autel/cooling_fan_location
+          options:
+            - label: "Re-test"
+              next: P1
 
         ESCALATE_AUTEL:
           prompt: |
             *Escalate power module*
-            Include: module ID/slot, any LEDs/error codes, actions taken (reseat), and timestamps/logs.
+            Include: module ID/slot, any LEDs/error codes, actions taken (reseat), cooling status, and timestamps/logs.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
