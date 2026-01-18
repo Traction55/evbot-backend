@@ -62,6 +62,24 @@ faults:
         • Interlock open
         • Failed contactor
 
+    report_template:
+      summary: >
+        AC input contactor fault identified during diagnostics. Corrective actions were carried out
+        to restore stable AC contactor pull-in and clear the fault.
+      actions:
+        - "Applied LOTO and verified safe state (DC bus discharged)"
+        - "Verified 3-phase supply present and within tolerance (imbalance/sag check)"
+        - "Checked interlock chain continuity (doors/E-stop/safety loop)"
+        - "Measured AC contactor coil command voltage during close attempt"
+        - "Inspected/secured coil wiring and auxiliary feedback wiring"
+        - "Power cycled charger and confirmed contactor pull-in"
+        - "Cleared faults and completed functional test session"
+      parts_used:
+        - "AC input contactor (if replaced)"
+      verification:
+        - "No active faults present"
+        - "Successful charging session confirmed"
+
     decision_tree:
       start_node: A0
       nodes:
@@ -265,6 +283,25 @@ faults:
       - Multimeter (true RMS preferred)
       - Insulated hand tools
 
+    report_template:
+      summary: >
+        DC output contactor fault identified during diagnostics. Corrective actions were carried out
+        to restore reliable DC contactor closure and confirm operation under load.
+      actions:
+        - "Applied LOTO and verified safe state (DC bus discharged)"
+        - "Power cycled charger and observed DC contactor close attempt"
+        - "Measured DC contactor coil voltage during close command"
+        - "Inspected/secured DC contactor coil wiring and auxiliary feedback wiring"
+        - "Removed faulted DC contactor (if required)"
+        - "Bench tested contactor using external power supply (coil energisation / mechanical operation)"
+        - "Installed replacement DC contactor (if required)"
+        - "Cleared faults and tested charger with electric vehicle"
+      parts_used:
+        - "DC contactor (if replaced)"
+      verification:
+        - "No active faults present"
+        - "Successful charging session confirmed"
+
     decision_tree:
       start_node: D0
       nodes:
@@ -396,18 +433,6 @@ faults:
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
-
-              report_template:
-summary: >
-    DC contactor fault identified during diagnostics. Corrective actions were carried out to restore normal operation.
-
-actions:
-    - "Tested contactor functionality"
-    - "Removed faulted contactor"
-    - "Bench tested contactor using external power supply"
-    - "Replaced DC contactor"
-    - "Tested charger with electric vehicle"
-
 
 
   - id: autel_backend_ocpp_comms_fault
