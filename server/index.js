@@ -49,8 +49,7 @@ function normalizePublicUrl(raw) {
 }
 
 const PUBLIC_URL = normalizePublicUrl(
-  process.env.PUBLIC_URL ||
-    (process.env.RAILWAY_PUBLIC_DOMAIN ? process.env.RAILWAY_PUBLIC_DOMAIN : "")
+  process.env.PUBLIC_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? process.env.RAILWAY_PUBLIC_DOMAIN : "")
 );
 
 // Force mode via USE_WEBHOOK (prevents local code from accidentally breaking prod webhook)
@@ -338,6 +337,36 @@ function popDtHistory(chatId, pack, faultId) {
   return prev;
 }
 
+// --------- REPORT TEMPLATE HELPERS (NEW) ----------
+function normalizeStringArray(v) {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => String(x || "").trim()).filter(Boolean);
+}
+
+function getReportTemplateFromFault(fault) {
+  const rt = fault?.report_template || {};
+  const actions = normalizeStringArray(rt.actions);
+  const parts_used = normalizeStringArray(rt.parts_used);
+  const verification = normalizeStringArray(rt.verification);
+  const summary = String(rt.summary || "").trim();
+
+  return {
+    summary,
+    actions,
+    parts_used,
+    verification,
+  };
+}
+
+function defaultReportTemplate() {
+  return {
+    summary: "",
+    actions: [],
+    parts_used: [],
+    verification: [],
+  };
+}
+
 // Legacy HTML renderer (keeps older YAML shapes working)
 function buildLegacyFaultHtml(f) {
   const lines = [];
@@ -446,7 +475,6 @@ function imageKeyToUrl(imageKey) {
   return PUBLIC_URL ? `${PUBLIC_URL}/images/${candidates[0]}` : "";
 }
 
-
 async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }) {
   const tree = fault?.decision_tree;
   const node = tree?.nodes?.[nodeId];
@@ -471,9 +499,7 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   const text = node.prompt || "…";
 
   // 1 button per row
-  const rows = (node.options || []).map((opt) => [
-    { text: opt.label, callback_data: dtCallback(pack, fault.id, opt.next) },
-  ]);
+  const rows = (node.options || []).map((opt) => [{ text: opt.label, callback_data: dtCallback(pack, fault.id, opt.next) }]);
 
   // Report from within the tree too
   rows.push([{ text: "🧾 Create report for this fault", callback_data: reportFromFaultCallback(pack, fault.id) }]);
@@ -514,17 +540,23 @@ function setReport(chatId, patch) {
     reportState.get(chatId) || {
       step: "site",
       data: {
+        // NEW: actionOptions drive the checklist UI (fault-specific if available)
+        actionOptions: [],
         actions: [],
+
         manufacturer: "",
+        faultId: "",
         faultTitle: "",
+        faultSummary: "",
+
         prefilled: false,
 
-        // NEW report fields
+        // Report fields
         assetId: "",
         technician: "",
         clientRef: "",
 
-        // NEW: optional photos (silent capture)
+        // Optional photos + notes
         photos: [],
         notes: "",
       },
@@ -552,6 +584,7 @@ function formatReportHtml(data) {
 
   const manufacturer = escapeHtml((data.manufacturer || "").toUpperCase());
   const faultTitle = escapeHtml(data.faultTitle || "");
+  const faultSummary = escapeHtml(data.faultSummary || "");
   const resolution = escapeHtml(data.resolution || "");
   const notes = escapeHtml(data.notes || "");
 
@@ -568,8 +601,9 @@ function formatReportHtml(data) {
     `<b>Technician:</b> ${technician}\n` +
     `<b>Client reference / ticket #:</b> ${clientRef}\n` +
     (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
-    `<b>Fault:</b> ${faultTitle}\n\n` +
-    `<b>Actions Taken:</b>\n${actionsLines}\n\n` +
+    `<b>Fault:</b> ${faultTitle}\n` +
+    (faultSummary ? `<b>Fault summary:</b> ${faultSummary}\n` : "") +
+    `\n<b>Actions Taken:</b>\n${actionsLines}\n\n` +
     `<b>Status / Outcome:</b> ${resolution}\n\n` +
     `<b>Attachments:</b>\n${attachmentsLine}\n` +
     (notes ? `\n<b>Notes:</b>\n${notes}\n` : "")
@@ -577,12 +611,16 @@ function formatReportHtml(data) {
 }
 
 async function startReport(chatId) {
+  // reset report state
   setReport(chatId, {
     step: "site",
     data: {
+      actionOptions: [],
       actions: [],
       manufacturer: "",
+      faultId: "",
       faultTitle: "",
+      faultSummary: "",
       prefilled: false,
       assetId: "",
       technician: "",
@@ -597,14 +635,20 @@ async function startReport(chatId) {
   });
 }
 
-// Start report with manufacturer+fault prefilled
+// Start report with manufacturer+fault prefilled + fault-specific actions (NEW)
 async function startReportFromFault(chatId, pack, fault) {
+  const t = getReportTemplateFromFault(fault) || defaultReportTemplate();
+
+  // If YAML didn’t provide actions, we’ll use fallback later (askActions)
   setReport(chatId, {
     step: "site",
     data: {
+      actionOptions: normalizeStringArray(t.actions), // fault-specific checklist options
       actions: [],
       manufacturer: pack,
+      faultId: String(fault?.id || ""),
       faultTitle: fault?.title || "",
+      faultSummary: String(t.summary || "").trim(),
       prefilled: true,
       assetId: "",
       technician: "",
@@ -689,6 +733,7 @@ async function askFault(chatId) {
   });
 }
 
+// Fallback generic checklist options (used when YAML doesn’t define report_template.actions)
 const REPORT_ACTION_OPTIONS = [
   "Firmware update performed",
   "Power cycle performed",
@@ -702,8 +747,10 @@ const REPORT_ACTION_OPTIONS = [
   "Other (add in notes)",
 ];
 
-function buildActionsKeyboard(selected = []) {
-  const rows = REPORT_ACTION_OPTIONS.map((label, idx) => {
+function buildActionsKeyboard(actionOptions, selected = []) {
+  const opts = Array.isArray(actionOptions) && actionOptions.length ? actionOptions : REPORT_ACTION_OPTIONS;
+
+  const rows = opts.map((label, idx) => {
     const isOn = selected.includes(label);
     return [{ text: `${isOn ? "✅" : "⬜️"} ${label}`, callback_data: `r:act:${idx}` }];
   });
@@ -719,14 +766,16 @@ function buildActionsKeyboard(selected = []) {
 async function askActions(chatId) {
   setReport(chatId, { step: "actions" });
   const st = reportState.get(chatId);
+
   const selected = st?.data?.actions || [];
+  const actionOptions = st?.data?.actionOptions || [];
 
   const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
   const mfr = st?.data?.manufacturer ? `\n<b>Manufacturer:</b> ${escapeHtml(cap(st.data.manufacturer))}` : "";
 
   return bot.sendMessage(chatId, `Select <b>actions performed</b>:${mfr}${title}`, {
     parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buildActionsKeyboard(selected) },
+    reply_markup: { inline_keyboard: buildActionsKeyboard(actionOptions, selected) },
   });
 }
 
@@ -1020,7 +1069,7 @@ bot.on("callback_query", async (q) => {
     return showManufacturerMenu(chatId, messageId);
   }
 
-  // Report from fault card / decision tree (autofill)
+  // Report from fault card / decision tree (autofill + fault-specific actions)
   if (data.startsWith("RF|")) {
     const [, pack, faultId] = data.split("|");
     const fault = getFaultById(pack, faultId);
@@ -1081,10 +1130,20 @@ bot.on("callback_query", async (q) => {
 
   if (data.startsWith("r:mfr:")) {
     const mfr = data.split(":")[2]; // autel | kempower
-    setReport(chatId, { data: { manufacturer: mfr } });
+    setReport(chatId, {
+      data: {
+        manufacturer: mfr,
+        faultId: "",
+        faultTitle: "",
+        faultSummary: "",
+        actionOptions: [], // reset until a fault is selected
+        actions: [],
+      },
+    });
     return askFault(chatId);
   }
 
+  // Selecting a fault from /report flow -> inject fault-specific checklist (NEW)
   if (data.startsWith("r:fault:")) {
     const parts = data.split(":"); // r:fault:AUTEL:<id> OR r:fault:KEMPOWER:<id>
     const type = parts[2];
@@ -1092,13 +1151,37 @@ bot.on("callback_query", async (q) => {
 
     if (type === "AUTEL") {
       const f = getFaultById("autel", id);
-      setReport(chatId, { data: { manufacturer: "autel", faultTitle: f ? f.title : `Autel Fault (${id})` } });
+      const t = getReportTemplateFromFault(f) || defaultReportTemplate();
+
+      setReport(chatId, {
+        data: {
+          manufacturer: "autel",
+          faultId: String(id),
+          faultTitle: f ? f.title : `Autel Fault (${id})`,
+          faultSummary: String(t.summary || "").trim(),
+          actionOptions: normalizeStringArray(t.actions), // fault-specific
+          actions: [],
+        },
+      });
+
       return askActions(chatId);
     }
 
     if (type === "KEMPOWER") {
       const f = getFaultById("kempower", id);
-      setReport(chatId, { data: { manufacturer: "kempower", faultTitle: f ? f.title : `Kempower Fault (${id})` } });
+      const t = getReportTemplateFromFault(f) || defaultReportTemplate();
+
+      setReport(chatId, {
+        data: {
+          manufacturer: "kempower",
+          faultId: String(id),
+          faultTitle: f ? f.title : `Kempower Fault (${id})`,
+          faultSummary: String(t.summary || "").trim(),
+          actionOptions: normalizeStringArray(t.actions), // fault-specific
+          actions: [],
+        },
+      });
+
       return askActions(chatId);
     }
 
@@ -1112,9 +1195,13 @@ bot.on("callback_query", async (q) => {
     if (data === "r:act:done") return askResolution(chatId);
 
     const idx = Number(data.split(":")[2]);
-    if (Number.isNaN(idx) || idx < 0 || idx >= REPORT_ACTION_OPTIONS.length) return;
 
-    const label = REPORT_ACTION_OPTIONS[idx];
+    const actionOptions =
+      Array.isArray(st.data.actionOptions) && st.data.actionOptions.length ? st.data.actionOptions : REPORT_ACTION_OPTIONS;
+
+    if (Number.isNaN(idx) || idx < 0 || idx >= actionOptions.length) return;
+
+    const label = actionOptions[idx];
     const selected = new Set(st.data.actions || []);
     if (selected.has(label)) selected.delete(label);
     else selected.add(label);
@@ -1125,7 +1212,7 @@ bot.on("callback_query", async (q) => {
       messageId,
       text: "Select <b>actions performed</b>:",
       parse_mode: "HTML",
-      reply_markup: { inline_keyboard: buildActionsKeyboard(Array.from(selected)) },
+      reply_markup: { inline_keyboard: buildActionsKeyboard(actionOptions, Array.from(selected)) },
     });
   }
 
