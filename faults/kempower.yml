@@ -1,489 +1,515 @@
-# kempower.yml
-# EVBot Fault Pack: Kempower (On-site Technician v1) — Descriptive + Tuned (nodes-based)
+# autel.yml
+# EVBot Fault Pack: Autel (On-site Technician v1) — Descriptive + Tuned (nodes-based)
 # Notes:
 # - Node-based decision tree: start_node + nodes map
 # - Each node has: prompt, options -> next
-# - Keep IDs stable for deep links
+# - Keep IDs stable so your bot can deep-link
 
 faults:
 
-  - id: kp_power_module_fault
-    platform: kempower
+  - id: autel_ac_contactor_fault
+    platform: autel
     charger_type: dc
-    title: "Power Module Fault / Module Offline (Kempower)"
+    title: "AC Contactor Fault (Autel DC)"
+    aliases:
+      - "AC Contactor Fault"
+      - "AC contactor error"
+      - "input contactor fault"
+      - "main contactor fault"
+      - "contactor open feedback"
+      - "contactor feedback error"
+
+    triggers:
+      any_text_contains:
+        - "ac contactor"
+        - "contactor fault"
+        - "contactor feedback"
+        - "input contactor"
+        - "main contactor"
+
     severity: high
-    tags: [power_module, rectifier, dc_bus, comms, cooling]
+    tags: [power, input, contactor, interlock, feedback, three_phase]
 
     description: >
-      One or more power modules are offline/not enabled/not communicating.
-      Most common field fix is reseating after making safe. If the fault follows the module when swapped,
-      it suggests a failed module. If it stays with the slot/system, suspect backplane/comms/controller/cooling.
+      The charger cannot close or verify the main AC input contactor.
+      Most commonly caused by missing/unstable 3-phase supply, undervoltage on the control PSU,
+      an open interlock, coil/aux wiring issues, or a failed contactor.
 
     likely_causes:
-      - Module not seated correctly (most common)
-      - Backplane/comms connection issue at slot
-      - Cooling-related shutdown (filters/fans/airflow)
-      - Failed module (less common)
+      - Missing phase / supply imbalance or sag during pull-in
+      - Low control PSU voltage / undervoltage
+      - Interlock open (door, E-stop chain, safety loop)
+      - Coil wiring / auxiliary feedback wiring loose or damaged
+      - Failed contactor (coil/mechanism/contacts)
 
     safety_notes:
-      - LOTO before cabinet access; wait minimum 5 minutes for DC bus discharge
-      - Verify safe state before handling modules
+      - LOTO before opening cabinet; wait minimum 5 minutes for DC bus discharge
+      - Verify absence of voltage with an approved meter before touching conductors
 
     tools_required:
-      - Multimeter (HV verification)
+      - Multimeter (true RMS preferred)
       - Insulated hand tools
-      - Torch / inspection light
 
     response:
       telegram_markdown: |
-        *Kempower — Power Module Fault / Module Offline*
+        *Autel DC — AC Contactor Fault*
+        The charger cannot close or verify the main AC input contactor.
 
-        One or more power modules are not communicating or not enabled.
-
-        Common causes:
-        • Module not seated correctly
-        • Loose comms/backplane connector
-        • Module disabled after transient fault
-        • Cooling-related shutdown
-        • Failed power module (least common)
-
-        Tap *Start troubleshooting* to proceed safely.
+        Most common causes:
+        • Missing phase / imbalance
+        • Low control PSU voltage
+        • Aux feedback or coil wiring fault
+        • Interlock open
+        • Failed contactor
 
     decision_tree:
-      start_node: P0
+      start_node: A0
       nodes:
-
-        P0:
+        A0:
           prompt: |
-            *Power Module Fault — Start*
-            Confirm the fault is active (or intermittent) and proceed with safe isolation first.
+            *AC Contactor Fault — Start*
+            Is the fault active right now, or only intermittent?
           options:
-            - label: "Module offline / fault active"
-              next: P1
+            - label: "Fault active"
+              next: A1
             - label: "Intermittent"
-              next: P1
+              next: A2
 
-        P1:
+        A1:
           prompt: |
-            *Make safe (LOTO)*
-            Isolate and confirm safe state before opening cabinet or handling modules.
+            *Check site supply*
+            Confirm 3-phase is present and stable (no missing phase/major imbalance).
           options:
-            - label: "Isolated & safe"
-              next: P2
-            - label: "Cannot isolate"
-              next: STOP_ESCALATE
+            - label: "Supply OK"
+              next: A3
+            - label: "Missing phase"
+              next: FIX_SUPPLY
 
-        P2:
+        A2:
           prompt: |
-            *Visual inspection*
-            Look for damage/overheating/water ingress or loose debris. If found — stop and escalate.
+            *Intermittent pattern*
+            Treat this like a supply/connection/PSU sag issue until proven otherwise. Continue through checks.
           options:
-            - label: "Damage / ingress visible"
-              next: STOP_DAMAGE
-            - label: "Looks OK"
-              next: P3
+            - label: "Continue"
+              next: A1
 
-        P3:
+        A3:
           prompt: |
-            *Reseat module (most common fix)*
-            Reseat the affected module to rule out poor seating/connection.
+            *Power cycle & check pull-in*
+            Power cycle and listen/observe: does the AC contactor pull in cleanly?
           options:
-            - label: "Reseated"
-              next: P4
-            - label: "Not possible"
-              next: ESCALATE_PACK
+            - label: "Cleared"
+              next: MONITOR
+            - label: "No pull-in"
+              next: A4
+            - label: "Chatter"
+              next: A5
+            - label: "Clunks but fault remains"
+              next: A6
 
-        P4:
+        A4:
           prompt: |
-            *Restore power & re-check*
-            Restore power, allow boot, and confirm whether the module returns online.
+            *No pull-in*
+            Work out whether it’s being *blocked* (interlock), *not commanded* (no coil voltage),
+            or *failed* (coil voltage present but no pull-in).
+          image: autel/ac_contactor_location
           options:
-            - label: "Module online"
-              next: RESOLVED_MONITOR
-            - label: "Still offline"
-              next: P5
+            - label: "Interlock open"
+              next: FIX_INTERLOCK
+            - label: "No coil voltage"
+              next: A7
+            - label: "Voltage present"
+              next: REPLACE_CONTACTOR
 
-        P5:
+        A5:
           prompt: |
-            *Does the fault follow the module?*
-            If permitted, swap modules to see whether the fault follows the module or stays with the slot/system.
+            *Chatter / weak pull-in*
+            Usually undervoltage (supply sag / weak control PSU) or a failing contactor.
           options:
-            - label: "Yes — follows module"
-              next: REPLACE_MODULE
-            - label: "No — stays with slot/system"
-              next: ESCALATE_PACK
-            - label: "Cannot swap"
-              next: ESCALATE_PACK
+            - label: "Voltage sag"
+              next: FIX_PSU_OR_SUPPLY
+            - label: "Voltage OK"
+              next: REPLACE_CONTACTOR
 
-        REPLACE_MODULE:
+        A6:
           prompt: |
-            *Suspected failed module*
-            Fault follows the module — likely defective. Escalate for replacement handling.
+            *Clunks but fault remains*
+            Contactor may be moving, but the system can’t verify it. Focus on aux feedback circuit.
+          image: autel/aux_feedback_terminals
           options:
-            - label: "Escalate for replacement"
-              next: ESCALATE_PACK
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "Feedback fault"
+              next: FIX_AUX_FEEDBACK
+            - label: "Feedback OK"
+              next: A8
 
-        STOP_DAMAGE:
+        A7:
           prompt: |
-            *STOP — Damage / overheating found*
-            Do not proceed. Escalate with photos and findings.
+            *No coil command*
+            No coil voltage typically points to PSU undervoltage, an open interlock, wiring break, or controller output issue.
+          image: autel/control_psu_location
           options:
-            - label: "Escalate"
-              next: ESCALATE_PACK
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "PSU / undervoltage"
+              next: FIX_PSU_OR_SUPPLY
+            - label: "Interlock"
+              next: FIX_INTERLOCK
+            - label: "Wiring"
+              next: FIX_WIRING
+            - label: "Controller"
+              next: ESCALATE_AUTEL
 
-        STOP_ESCALATE:
+        A8:
           prompt: |
-            *STOP — Unable to isolate safely*
-            Do not proceed if you can’t confirm safe state. Escalate.
+            *Firmware / config check*
+            If supply/pull-in/feedback look OK but it still faults, check firmware/config/logs then escalate if needed.
           options:
-            - label: "Escalate"
-              next: ESCALATE_PACK
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "Resolved"
+              next: MONITOR
+            - label: "Still faulting"
+              next: ESCALATE_AUTEL
 
-        ESCALATE_PACK:
+        FIX_SUPPLY:
           prompt: |
-            *Escalation pack — Power Module*
-            Include: module slot/ID, reseat result, swap test outcome (if done),
-            LEDs/error codes, photos, and timestamps.
+            *Fix supply issue*
+            Restore correct 3-phase supply (phase present, within spec, balanced). Then re-test.
           options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "Re-test"
+              next: A3
 
-        RESOLVED_MONITOR:
+        FIX_INTERLOCK:
           prompt: |
-            *Resolved — monitor*
+            *Fix interlock*
+            Identify which interlock is open (door, E-stop chain, safety loop) and restore continuity. Then re-test.
+          image: autel/interlock_chain_points
+          options:
+            - label: "Re-test"
+              next: A3
+
+        FIX_AUX_FEEDBACK:
+          prompt: |
+            *Fix aux feedback*
+            Repair/secure aux feedback wiring and confirm state change during pull-in/pull-out. Then re-test.
+          options:
+            - label: "Re-test"
+              next: A3
+
+        FIX_PSU_OR_SUPPLY:
+          prompt: |
+            *Fix PSU / undervoltage*
+            Address control PSU undervoltage or supply sag during pull-in (connections, PSU health, upstream quality). Then re-test.
+          options:
+            - label: "Re-test"
+              next: A3
+
+        FIX_WIRING:
+          prompt: |
+            *Fix wiring*
+            Repair/secure coil wiring and related harnessing (loose terminals, damaged conductors, heat issues). Then re-test.
+          options:
+            - label: "Re-test"
+              next: A3
+
+        REPLACE_CONTACTOR:
+          prompt: |
+            *Replace AC contactor*
+            Coil voltage present but no reliable pull-in = likely failed contactor. Replace and function test.
+          options:
+            - label: "Re-test"
+              next: A3
+
+        ESCALATE_AUTEL:
+          prompt: |
+            *Escalate to Autel*
+            Include: site voltages, coil command findings, interlock status, feedback checks, and timestamps/logs.
+          options:
+            - label: "Back to start"
+              next: A0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
             Run a test session and monitor for recurrence.
           options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-            - label: "Restart"
-              next: P0
-
-        MENU_KEMPOWER:
-          prompt: "Returning to Kempower menu…"
-          options:
-            - label: "Open Kempower menu"
-              next: __MENU_KEMPOWER__
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
-  - id: kp_backend_comms_fault
-    platform: kempower
+  - id: autel_dc_contactor_fault
+    platform: autel
     charger_type: dc
-    title: "Backend / OCPP Communication Fault (Kempower)"
+    title: "DC Contactor Fault / Failed to Close (Autel DC)"
+    severity: high
+    tags: [dc, contactor, output, hv, safety]
+
+    description: >
+      The charger is unable to close or verify the DC output contactor.
+      Most causes are interlock inhibits, missing coil command, undervoltage/PSU issues,
+      wiring faults, auxiliary feedback issues, or a failed/welded contactor.
+
+    likely_causes:
+      - Interlock preventing closure
+      - No coil command from controller
+      - Coil wiring/terminals loose or damaged
+      - PSU undervoltage or voltage sag at pull-in
+      - Failed or welded DC contactor / feedback fault
+
+    safety_notes:
+      - LOTO before cabinet access; wait minimum 5 minutes for DC bus discharge
+      - Verify safe state before touching DC contactor/DC bus components
+
+    tools_required:
+      - Multimeter (true RMS preferred)
+      - Insulated hand tools
+
+    decision_tree:
+      start_node: D0
+      nodes:
+        D0:
+          prompt: |
+            *DC Contactor Fault — Start*
+            Is the fault active right now, or intermittent?
+          options:
+            - label: "Fault active"
+              next: D1
+            - label: "Intermittent"
+              next: D2
+
+        D1:
+          prompt: |
+            *Power cycle and observe*
+            Power cycle and observe contactor behaviour (close attempt, pull-in, and whether the fault clears).
+          options:
+            - label: "Cleared"
+              next: MONITOR
+            - label: "No pull-in"
+              next: D3
+            - label: "Closes but faults"
+              next: D6
+
+        D2:
+          prompt: |
+            *Intermittent behaviour*
+            Intermittent faults are often loose wiring, thermal movement, or PSU/supply sag. Continue through checks.
+          options:
+            - label: "Continue"
+              next: D1
+
+        D3:
+          prompt: |
+            *Check coil voltage*
+            Measure whether coil voltage is present during the close command.
+            This tells you if it’s a command/inhibit issue vs contactor/mechanical failure.
+          image: autel/dc_contactor_location
+          options:
+            - label: "No voltage"
+              next: D4
+            - label: "Voltage present"
+              next: REPLACE_CONTACTOR
+            - label: "Voltage sags"
+              next: FIX_PSU
+
+        D4:
+          prompt: |
+            *No coil command*
+            No coil voltage typically points to an interlock inhibit, wiring issue, or controller output fault.
+          options:
+            - label: "Interlock"
+              next: FIX_INTERLOCK
+            - label: "Wiring"
+              next: FIX_WIRING
+            - label: "Controller"
+              next: ESCALATE_AUTEL
+
+        D6:
+          prompt: |
+            *Aux feedback / verification*
+            If it closes but faults, check auxiliary feedback circuit or welded contactor condition.
+          image: autel/aux_feedback_terminals
+          options:
+            - label: "Feedback fault"
+              next: FIX_AUX_FEEDBACK
+            - label: "Welded"
+              next: REPLACE_CONTACTOR
+
+        FIX_PSU:
+          prompt: |
+            *Fix PSU / undervoltage*
+            Address control power stability and confirm voltage holds during pull-in. Then re-test.
+          options:
+            - label: "Re-test"
+              next: D1
+
+        FIX_INTERLOCK:
+          prompt: |
+            *Fix interlock*
+            Identify the open interlock (door, E-stop chain, safety loop) and restore continuity. Then re-test.
+          options:
+            - label: "Re-test"
+              next: D1
+
+        FIX_WIRING:
+          prompt: |
+            *Fix wiring*
+            Repair/secure coil wiring and harness connections (loose terminals, heat damage). Then re-test.
+          options:
+            - label: "Re-test"
+              next: D1
+
+        FIX_AUX_FEEDBACK:
+          prompt: |
+            *Fix aux feedback*
+            Repair/secure auxiliary feedback wiring and confirm state change. Then re-test.
+          options:
+            - label: "Re-test"
+              next: D1
+
+        REPLACE_CONTACTOR:
+          prompt: |
+            *Replace DC contactor*
+            Coil voltage present but unreliable/no operation = likely failed/welded contactor. Replace and function test.
+          options:
+            - label: "Re-test"
+              next: D1
+
+        ESCALATE_AUTEL:
+          prompt: |
+            *Escalate to Autel*
+            Include: coil voltage findings, interlock status, wiring checks performed, and timestamps/logs.
+          options:
+            - label: "Back"
+              next: D0
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            Run a test session and monitor for recurrence.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+
+  - id: autel_backend_ocpp_comms_fault
+    platform: autel
+    charger_type: dc
+    title: "Backend / OCPP Communication Fault (Autel DC)"
     severity: high
     tags: [ocpp, backend, comms, modem, sim, network]
 
     description: >
-      The charger is offline to the backend (OCPP). Start with reboot/power cycle to recover modem registration.
-      If it remains offline, check antenna/SIM basics, then deeper network causes (APN, carrier outage, firewall blocks).
+      The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
+      If basic recovery fails, investigate SIM/APN, carrier/signal issues, DNS/time sync, and backend firewall/whitelisting.
 
     likely_causes:
-      - Modem/SIM not registered on packet data
-      - Poor signal / antenna issue
-      - Incorrect APN
-      - Carrier outage/throttling
-      - Backend firewall/whitelist blocking traffic
+      - SIM not registered on packet data / provisioning issue
+      - Incorrect APN settings
+      - Carrier outage/throttling or poor signal/antenna issue
+      - DNS or time sync issues affecting TLS/OCPP handshake
+      - Backend firewall/whitelist blocking private IP ranges
 
     safety_notes:
-      - Most checks can be performed without entering HV compartments
+      - Most checks are low risk and can be done without entering HV compartments
       - Follow ESD precautions if accessing comms hardware
 
     tools_required:
-      - Access to APN details / backend endpoint requirements
+      - Phone/laptop for hotspot testing (if permitted)
+      - Access to APN/back-end requirements
       - Known-good SIM (optional)
-      - Phone/laptop hotspot (if permitted)
-
-    response:
-      telegram_markdown: |
-        *Kempower — Backend / OCPP Communication Fault*
-
-        The charger is not connected to the backend (offline / no remote control).
-
-        Common causes:
-        • Modem or SIM registration issue
-        • Antenna damage / poor signal
-        • Network environment (basement, plant room)
-        • Backend endpoint mismatch
 
     decision_tree:
       start_node: C0
       nodes:
-
         C0:
           prompt: |
             *Backend / OCPP offline*
-            Confirm offline state and proceed through recovery steps.
+            Confirm offline state and proceed with recovery steps.
           options:
             - label: "Continue"
               next: C1
 
         C1:
           prompt: |
-            *Reboot / power cycle*
-            Reboot and allow time for modem registration and backend handshake.
+            *Reboot charger*
+            Reboot and allow time for modem registration and OCPP handshake.
           options:
             - label: "Online"
-              next: RESOLVED_MONITOR
+              next: MONITOR
             - label: "Still offline"
               next: C2
 
         C2:
           prompt: |
-            *Basic antenna / SIM checks*
-            Inspect antenna condition/connection and confirm SIM is seated and serviceable.
+            *Next step*
+            If reboot did not restore comms, either escalate or perform advanced SIM/network checks.
           options:
-            - label: "Issue found"
-              next: C1
-            - label: "No issue"
-              next: ADVANCED_NETWORK
+            - label: "📈 Escalate (standard)"
+              next: ESCALATE_AUTEL
+            - label: "🧠 Deep dive — advanced checks"
+              next: ADVANCED_SIM_NETWORK
 
-        ADVANCED_NETWORK:
+        ADVANCED_SIM_NETWORK:
           prompt: |
-            *Deep dive — Network*
-            Check:
-            • SIM registered on GSM only
-            • APN incorrect
-            • Carrier outage
-            • Private IP blocked
+            🧠 *Deep Dive — SIM / Network / OCPP*
+            Check these advanced causes:
+            • SIM registered on GSM only (no packet data)
+            • Incorrect APN
+            • Carrier outage or throttling
+            • Private IP blocked by backend firewall
+            • DNS or time sync issues
           options:
-            - label: "Fixed"
+            - label: "Issue fixed"
               next: C1
-            - label: "Escalate"
-              next: ESCALATE_PACK
+            - label: "No issue found"
+              next: ESCALATE_AUTEL
 
-        ESCALATE_PACK:
+        ESCALATE_AUTEL:
           prompt: |
-            *Escalation pack — Backend/OCPP*
+            *Escalate backend / OCPP*
             Include: last known online time, signal strength (if available),
-            SIM/APN checks, and timestamps/logs.
+            SIM/APN checks, and any comms errors/log timestamps.
           options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
-        RESOLVED_MONITOR:
+        MONITOR:
           prompt: |
-            *Resolved — monitor*
+            *Monitor*
             Confirm stable backend connection and monitor for dropouts.
           options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-
-        MENU_KEMPOWER:
-          prompt: "Returning to Kempower menu…"
-          options:
-            - label: "Open Kempower menu"
-              next: __MENU_KEMPOWER__
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
-  - id: kp_estop_interlock_active
-    platform: kempower
+  - id: autel_overtemp_cooling_fault
+    platform: autel
     charger_type: dc
-    title: "E-Stop / Interlock Active (Kempower)"
+    title: "Overtemperature / Cooling Fault (Autel DC)"
     severity: high
-    tags: [safety, interlock, estop]
+    tags: [cooling, overtemp, fans, filters]
 
     description: >
-      An E-stop or safety interlock is active, preventing operation.
-      Start by checking all E-stops (including any remote/pedestal devices), then door/interlock switches.
+      Overtemperature indicates the charger is exceeding thermal limits or has detected inadequate cooling.
+      Most common field cause is blocked airflow (dirty filters/vents). Fan faults or poor ventilation can also trigger it.
 
     likely_causes:
-      - Local or remote E-stop engaged
-      - Door interlock open/misaligned
-      - Safety loop wiring fault
-      - Interlock input fault / controller-side interpretation issue
-
-    safety_notes:
-      - Do not bypass interlocks/E-stops
-      - Follow site safety rules; isolate if cabinet access is required
-
-    tools_required:
-      - Inspection light
-      - Multimeter (optional, for continuity checks if authorised)
-
-    decision_tree:
-      start_node: S0
-      nodes:
-
-        S0:
-          prompt: |
-            *E-Stop / Interlock active*
-            Start with E-stop checks (including any remote/pedestal E-stops).
-          options:
-            - label: "Check E-Stops"
-              next: S1
-
-        S1:
-          prompt: |
-            *Any E-Stop engaged?*
-            Confirm all E-stops are reset/released.
-          options:
-            - label: "Yes"
-              next: RESOLVED_TEST
-            - label: "No"
-              next: S2
-
-        S2:
-          prompt: |
-            *Check doors / interlocks*
-            Confirm all doors are closed and interlock switches are aligned and intact.
-          options:
-            - label: "Issue found"
-              next: RESOLVED_TEST
-            - label: "Nothing obvious"
-              next: ESCALATE_PACK
-
-        RESOLVED_TEST:
-          prompt: |
-            *Resolved — test charger*
-            Clear the interlock condition, then perform a functional test.
-          options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-
-        ESCALATE_PACK:
-          prompt: |
-            *Escalation pack — Interlock*
-            Include: which E-stops checked, door/interlock findings, and timestamps/logs.
-          options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-
-        MENU_KEMPOWER:
-          prompt: "Returning to Kempower menu…"
-          options:
-            - label: "Open Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
-  - id: kp_imd_isolation_fault
-    platform: kempower
-    charger_type: dc
-    title: "IMD / Insulation Fault (Kempower)"
-    severity: critical
-    tags: [imd, insulation, earth_leakage, safety]
-
-    description: >
-      IMD/insulation fault indicates potential insulation breakdown between HV conductors and earth.
-      Treat as safety-critical. Common field triggers include moisture ingress in connectors/cables or damaged insulation.
-
-    likely_causes:
-      - Moisture/water ingress in connector or cable head
-      - Damaged DC cable insulation or crushed conductors
-      - Contamination (conductive dirt/salt) causing leakage paths
-      - Internal insulation breakdown within charger components
-
-    safety_notes:
-      - Do not continue charging if insulation risk is suspected
-      - LOTO before inspecting cables/connectors
-      - If moisture/ingress is present, treat as STOP condition and escalate
-
-    tools_required:
-      - Inspection light
-      - Megger/insulation tester (only if authorised and procedure allows)
-
-    decision_tree:
-      start_node: I0
-      nodes:
-
-        I0:
-          prompt: |
-            *IMD / insulation fault detected*
-            Start with cable/connector inspection for moisture or damage.
-          options:
-            - label: "Inspect connector/cable"
-              next: I1
-
-        I1:
-          prompt: |
-            *Moisture or damage present?*
-            If any damage/ingress is found, STOP and escalate (safety-critical).
-          options:
-            - label: "Yes"
-              next: STOP_DAMAGE
-            - label: "No"
-              next: I2
-
-        I2:
-          prompt: |
-            *Reboot & re-test*
-            If no visible damage/ingress, reboot and re-test to confirm whether it clears.
-          options:
-            - label: "Cleared"
-              next: RESOLVED_MONITOR
-            - label: "Still present"
-              next: ESCALATE_PACK
-
-        STOP_DAMAGE:
-          prompt: |
-            *STOP — insulation risk*
-            Do not proceed. Escalate with photos of cable/connector and site conditions.
-          options:
-            - label: "Escalate"
-              next: ESCALATE_PACK
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-
-        ESCALATE_PACK:
-          prompt: |
-            *Escalation pack — IMD*
-            Include: photos, moisture/contamination observations, weather/site conditions, and timestamps/logs.
-          options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-
-        RESOLVED_MONITOR:
-          prompt: |
-            *Resolved — monitor closely*
-            Run a test session and monitor closely. If it returns, escalate.
-          options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
-
-        MENU_KEMPOWER:
-          prompt: "Returning to Kempower menu…"
-          options:
-            - label: "Open Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
-  - id: kp_overtemp_cooling_fault
-    platform: kempower
-    charger_type: dc
-    title: "Overtemperature / Cooling Fault (Kempower)"
-    severity: high
-    tags: [cooling, fans, filters, airflow]
-
-    description: >
-      Overtemperature/cooling fault indicates the unit is exceeding thermal limits or airflow is insufficient.
-      Most common field cause is blocked filters/vents. Fan faults or poor ventilation can also trigger it.
-
-    likely_causes:
-      - Dirty filters or blocked vents restricting airflow
-      - Failed/obstructed fans
-      - Poor ventilation around cabinet (recirculation)
+      - Dirty/blocked filters or intake vents
+      - Fan failure or obstruction
+      - Poor cabinet ventilation / recirculation
       - High ambient temperature / direct sun load
 
     safety_notes:
       - Start with external airflow/filter checks where possible
-      - Follow LOTO requirements for internal inspection
+      - Follow LOTO requirements for internal fan inspection
 
     tools_required:
-      - Inspection light
+      - Torch / inspection light
       - Basic hand tools for filter access (if required)
       - IR thermometer (optional)
 
     decision_tree:
       start_node: T0
       nodes:
-
         T0:
           prompt: |
-            *Overtemperature / cooling fault*
+            *Overtemperature detected*
             Start with airflow checks and filter condition.
           options:
             - label: "Check airflow"
@@ -491,40 +517,98 @@ faults:
 
         T1:
           prompt: |
-            *Filters dirty / vents blocked?*
-            Inspect filters and vents for dust buildup and blockage.
+            *Filters dirty?*
+            Inspect filters/vents for blockage.
           options:
             - label: "Yes"
               next: FIX_FILTERS
             - label: "No"
-              next: ESCALATE_PACK
+              next: ESCALATE_AUTEL
 
         FIX_FILTERS:
           prompt: |
-            *Clean filters & vents*
-            Clean/replace filters and clear vents, then re-test under load.
+            *Clean filters*
+            Clean/replace filters, then re-test under load.
           options:
             - label: "Re-test"
-              next: RESOLVED_MONITOR
+              next: MONITOR
 
-        ESCALATE_PACK:
+        ESCALATE_AUTEL:
           prompt: |
-            *Escalation pack — Cooling*
-            Include: ambient conditions, fan observations, and any temperature/log readings.
+            *Escalate thermal fault*
+            Include: ambient conditions, fan operation observations, and any temp/log readings.
           options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
-        RESOLVED_MONITOR:
+        MONITOR:
           prompt: |
-            *Resolved — monitor*
-            Confirm temperatures stabilise within normal range during a test session.
+            *Monitor*
+            Run a test session and monitor for recurrence.
           options:
-            - label: "Kempower menu"
-              next: MENU_KEMPOWER
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
-        MENU_KEMPOWER:
-          prompt: "Returning to Kempower menu…"
+
+  - id: autel_power_module_fault
+    platform: autel
+    charger_type: dc
+    title: "Power Module Fault / Module Offline (Autel DC)"
+    severity: high
+    tags: [power_module, rectifier, dc_bus, comms, cooling]
+
+    description: >
+      A power module is offline or reporting a module fault. Start with reseating to rule out poor seating or connection.
+      If it remains offline, suspect module failure, cooling trip, or controller/comms issue.
+
+    likely_causes:
+      - Module not seated correctly / loose connections
+      - Internal comms issue between module and controller
+      - Cooling-related trip (fan/airflow/filter)
+      - Failed power module
+
+    safety_notes:
+      - LOTO before access; wait minimum 5 minutes for DC bus discharge
+      - Verify safe state before handling modules
+
+    tools_required:
+      - Torch / inspection light
+      - Basic hand tools for access
+      - Multimeter (as needed)
+
+    decision_tree:
+      start_node: P0
+      nodes:
+        P0:
+          prompt: |
+            *Power module offline*
+            Reseat the affected module to rule out poor seating/connection.
           options:
-            - label: "Open Kempower menu"
-              next: __MENU_KEMPOWER__
+            - label: "Reseat module"
+              next: P1
+
+        P1:
+          prompt: |
+            *Re-test*
+            Confirm whether the module returns online after reseat.
+          options:
+            - label: "Resolved"
+              next: MONITOR
+            - label: "Still offline"
+              next: ESCALATE_AUTEL
+
+        ESCALATE_AUTEL:
+          prompt: |
+            *Escalate power module*
+            Include: module ID/slot, any LEDs/error codes, actions taken (reseat), and timestamps/logs.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        MONITOR:
+          prompt: |
+            *Monitor*
+            Run a test session and confirm stable module operation.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__

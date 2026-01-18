@@ -397,6 +397,18 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
+              report_template:
+summary: >
+    DC contactor fault identified during diagnostics. Corrective actions were carried out to restore normal operation.
+
+actions:
+    - "Tested contactor functionality"
+    - "Removed faulted contactor"
+    - "Bench tested contactor using external power supply"
+    - "Replaced DC contactor"
+    - "Tested charger with electric vehicle"
+
+
 
   - id: autel_backend_ocpp_comms_fault
     platform: autel
