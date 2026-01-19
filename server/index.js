@@ -1,9 +1,10 @@
 /**
  * EVBot backend (Express + YAML fault library + Telegram bot)
  * - Works locally (polling) and on Railway (webhook)
- * - Manufacturer menu first (Autel + Kempower)
+ * - Manufacturer menu first (Autel + Kempower + Tritium)
  * - Autel faults (YAML) + YAML decision_tree
  * - Kempower faults (YAML) + YAML decision_tree
+ * - Tritium faults (YAML) + YAML decision_tree
  * - /report generates a client-ready service report
  *
  * New additions (Jan 2026):
@@ -25,7 +26,8 @@
  *   TELEGRAM_WEBHOOK_SECRET=optional_secret
  */
 
-require("dotenv").config();
+require("dotenv").config({ path: require("path").join(__dirname, ".env") });
+
 
 const express = require("express");
 const cors = require("cors");
@@ -72,6 +74,7 @@ if (!BOT_TOKEN) {
 const FAULTS_DIR = path.join(__dirname, "..", "faults");
 const AUTEL_FILE = path.join(FAULTS_DIR, "autel.yml");
 const KEMPOWER_FILE = path.join(FAULTS_DIR, "kempower.yml");
+const TRITIUM_FILE = path.join(FAULTS_DIR, "tritium.yml");
 
 function loadYamlSafe(file) {
   try {
@@ -113,6 +116,14 @@ function loadKempower() {
   return normalizeFaultPack(loadYamlSafe(KEMPOWER_FILE));
 }
 
+function loadTritium() {
+  if (!fs.existsSync(TRITIUM_FILE)) {
+    console.error(`❌ Missing tritium.yml at: ${TRITIUM_FILE}`);
+    return { faults: [] };
+  }
+  return normalizeFaultPack(loadYamlSafe(TRITIUM_FILE));
+}
+
 // Boot log (shows in Railway Deploy Logs)
 try {
   const bootAutel = loadAutel();
@@ -124,6 +135,12 @@ try {
   const bootKp = loadKempower();
   console.log(`✅ Kempower file path: ${KEMPOWER_FILE}`);
   console.log(`✅ Kempower faults loaded: ${bootKp.faults.length}`);
+} catch (_) {}
+
+try {
+  const bootTri = loadTritium();
+  console.log(`✅ Tritium file path: ${TRITIUM_FILE}`);
+  console.log(`✅ Tritium faults loaded: ${bootTri.faults.length}`);
 } catch (_) {}
 
 // ------------------- EXPRESS -------------------
@@ -181,6 +198,16 @@ app.get("/debug/kempower", (req, res) => {
   res.json({
     file: KEMPOWER_FILE,
     exists: fs.existsSync(KEMPOWER_FILE),
+    count: data.faults.length,
+    titles: data.faults.slice(0, 30).map((f) => f.title),
+  });
+});
+
+app.get("/debug/tritium", (req, res) => {
+  const data = loadTritium();
+  res.json({
+    file: TRITIUM_FILE,
+    exists: fs.existsSync(TRITIUM_FILE),
     count: data.faults.length,
     titles: data.faults.slice(0, 30).map((f) => f.title),
   });
@@ -284,7 +311,7 @@ async function upsertPhotoOrText(chatId, opts) {
 const reportState = new Map();
 
 // ✅ Decision-tree state with HISTORY
-// chatId -> { pack: "autel"|"kempower", faultId: string, history: string[] }
+// chatId -> { pack: "autel"|"kempower"|"tritium", faultId: string, history: string[] }
 const dtState = new Map();
 
 // ------------------- YAML DECISION TREE SUPPORT -------------------
@@ -296,7 +323,8 @@ function dtBackCallback(pack, faultId) {
 }
 
 function getFaultById(pack, id) {
-  const data = pack === "kempower" ? loadKempower() : loadAutel();
+  const data =
+    pack === "kempower" ? loadKempower() : pack === "tritium" ? loadTritium() : loadAutel();
   return (data.faults || []).find((x) => String(x.id) === String(id));
 }
 
@@ -402,6 +430,12 @@ function reportFromFaultCallback(pack, faultId) {
   return `RF|${pack}|${faultId}`;
 }
 
+function packMenuCallback(pack) {
+  if (pack === "kempower") return "kempower:menu";
+  if (pack === "tritium") return "tritium:menu";
+  return "autel:menu";
+}
+
 async function showFaultCard({ chatId, messageId, pack, fault }) {
   resetDt(chatId);
 
@@ -426,7 +460,7 @@ async function showFaultCard({ chatId, messageId, pack, fault }) {
   ]);
 
   // Back to menu
-  rows.push([{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }]);
+  rows.push([{ text: "⬅️ Back", callback_data: packMenuCallback(pack) }]);
 
   // Preferred: YAML field response.telegram_markdown
   if (fault?.response?.telegram_markdown) {
@@ -482,15 +516,14 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   // Special internal jump back to menu (from YAML)
   if (nodeId === "__MENU_KEMPOWER__") return showKempowerMenu(chatId, messageId);
   if (nodeId === "__MENU_AUTEL__") return showAutelMenu(chatId, messageId);
+  if (nodeId === "__MENU_TRITIUM__") return showTritiumMenu(chatId, messageId);
 
   if (!node) {
     return upsertMessage(chatId, {
       messageId,
       text: `⚠️ Decision node not found: ${nodeId}`,
       parse_mode: "Markdown",
-      reply_markup: kb([
-        [{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }],
-      ]),
+      reply_markup: kb([[{ text: "⬅️ Back", callback_data: packMenuCallback(pack) }]]),
     });
   }
 
@@ -498,19 +531,17 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
 
   const text = node.prompt || "…";
 
-  // 1 button per row
-  const rows = (node.options || []).map((opt) => [{ text: opt.label, callback_data: dtCallback(pack, fault.id, opt.next) }]);
+  // 1 button per row (support YAML either opt.label or opt.text)
+  const rows = (node.options || []).map((opt) => [
+    { text: opt.label || opt.text || "Next", callback_data: dtCallback(pack, fault.id, opt.next) },
+  ]);
 
   // Report from within the tree too
   rows.push([{ text: "🧾 Create report for this fault", callback_data: reportFromFaultCallback(pack, fault.id) }]);
 
   rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(pack, fault.id) }]);
-  rows.push([
-    {
-      text: pack === "kempower" ? "🏠 Kempower menu" : "🏠 Autel menu",
-      callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu",
-    },
-  ]);
+
+  rows.push([{ text: `🏠 ${cap(pack)} menu`, callback_data: packMenuCallback(pack) }]);
 
   const imageUrl = node.image ? imageKeyToUrl(node.image) : "";
 
@@ -639,11 +670,10 @@ async function startReport(chatId) {
 async function startReportFromFault(chatId, pack, fault) {
   const t = getReportTemplateFromFault(fault) || defaultReportTemplate();
 
-  // If YAML didn’t provide actions, we’ll use fallback later (askActions)
   setReport(chatId, {
     step: "site",
     data: {
-      actionOptions: normalizeStringArray(t.actions), // fault-specific checklist options
+      actionOptions: normalizeStringArray(t.actions),
       actions: [],
       manufacturer: pack,
       faultId: String(fault?.id || ""),
@@ -690,6 +720,7 @@ async function askReportManufacturer(chatId) {
   const rows = [
     [{ text: "🔵 Autel", callback_data: "r:mfr:autel" }],
     [{ text: "🟢 Kempower", callback_data: "r:mfr:kempower" }],
+    [{ text: "🔺 Tritium", callback_data: "r:mfr:tritium" }],
     [{ text: "Cancel", callback_data: "r:cancel" }],
   ];
 
@@ -699,14 +730,20 @@ async function askReportManufacturer(chatId) {
   });
 }
 
+function loadPackByName(pack) {
+  const p = String(pack || "").toLowerCase();
+  if (p === "kempower") return loadKempower();
+  if (p === "tritium") return loadTritium();
+  return loadAutel();
+}
+
 async function askFault(chatId) {
   setReport(chatId, { step: "fault" });
 
   const st = reportState.get(chatId);
-  const pack = (st?.data?.manufacturer || "autel").toLowerCase();
-  const isKp = pack === "kempower";
+  const pack = String(st?.data?.manufacturer || "autel").toLowerCase();
 
-  const data = isKp ? loadKempower() : loadAutel();
+  const data = loadPackByName(pack);
   const faults = data.faults || [];
 
   const rows = [];
@@ -714,20 +751,20 @@ async function askFault(chatId) {
   if (!faults.length) {
     rows.push([
       {
-        text: `⚠️ No ${isKp ? "Kempower" : "Autel"} faults loaded (check /debug/${isKp ? "kempower" : "autel"})`,
+        text: `⚠️ No ${cap(pack)} faults loaded (check /debug/${pack})`,
         callback_data: "noop",
       },
     ]);
   } else {
     faults.forEach((f) => {
-      rows.push([{ text: f.title, callback_data: `r:fault:${isKp ? "KEMPOWER" : "AUTEL"}:${f.id}` }]);
+      rows.push([{ text: f.title, callback_data: `r:fault:${pack.toUpperCase()}:${f.id}` }]);
     });
   }
 
   rows.push([{ text: "⬅️ Back", callback_data: "r:back:mfr" }]);
   rows.push([{ text: "Cancel", callback_data: "r:cancel" }]);
 
-  return bot.sendMessage(chatId, `Select the <b>${isKp ? "Kempower" : "Autel"} fault</b>:`, {
+  return bot.sendMessage(chatId, `Select the <b>${escapeHtml(cap(pack))} fault</b>:`, {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
@@ -854,6 +891,7 @@ function showManufacturerMenu(chatId, messageId) {
   const rows = [
     [{ text: "🔵 Autel", callback_data: "mfr:autel" }],
     [{ text: "🟢 Kempower", callback_data: "mfr:kempower" }],
+    [{ text: "🔺 Tritium", callback_data: "mfr:tritium" }],
     [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
     [{ text: "🔁 Reset", callback_data: "reset" }],
   ];
@@ -927,6 +965,36 @@ async function showKempowerMenu(chatId, messageId) {
   });
 }
 
+function buildTritiumMenuKeyboard() {
+  const data = loadTritium();
+  const faults = data.faults || [];
+
+  const rows = [];
+  if (!faults.length) {
+    rows.push([{ text: "⚠️ No Tritium faults loaded (check /debug/tritium)", callback_data: "noop" }]);
+  } else {
+    faults.forEach((f) => {
+      rows.push([{ text: f.title, callback_data: `TRITIUM:${f.id}` }]);
+    });
+  }
+
+  rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
+  rows.push([{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }]);
+  rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
+
+  return rows;
+}
+
+async function showTritiumMenu(chatId, messageId) {
+  const rows = buildTritiumMenuKeyboard();
+  return upsertMessage(chatId, {
+    messageId,
+    text: "Tritium Troubleshooting 🔺\n\nChoose a Tritium fault:",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
 // ------------------- COMMANDS -------------------
 bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
@@ -955,6 +1023,11 @@ bot.onText(/^\/autel$/, async (msg) => {
 bot.onText(/^\/kempower$/, async (msg) => {
   resetDt(msg.chat.id);
   await showKempowerMenu(msg.chat.id);
+});
+
+bot.onText(/^\/tritium$/, async (msg) => {
+  resetDt(msg.chat.id);
+  await showTritiumMenu(msg.chat.id);
 });
 
 bot.onText(/^\/report$/, async (msg) => {
@@ -1066,6 +1139,7 @@ bot.on("callback_query", async (q) => {
     const mfr = data.split(":")[1];
     if (mfr === "autel") return showAutelMenu(chatId, messageId);
     if (mfr === "kempower") return showKempowerMenu(chatId, messageId);
+    if (mfr === "tritium") return showTritiumMenu(chatId, messageId);
     return showManufacturerMenu(chatId, messageId);
   }
 
@@ -1086,7 +1160,9 @@ bot.on("callback_query", async (q) => {
     const fault = getFaultById(pack, faultId);
     if (!fault) {
       resetDt(chatId);
-      return pack === "kempower" ? showKempowerMenu(chatId, messageId) : showAutelMenu(chatId, messageId);
+      if (pack === "kempower") return showKempowerMenu(chatId, messageId);
+      if (pack === "tritium") return showTritiumMenu(chatId, messageId);
+      return showAutelMenu(chatId, messageId);
     }
 
     const prevNode = popDtHistory(chatId, pack, faultId);
@@ -1106,7 +1182,7 @@ bot.on("callback_query", async (q) => {
         messageId,
         text: "⚠️ Fault not found.",
         parse_mode: "HTML",
-        reply_markup: kb([[{ text: "⬅️ Back", callback_data: pack === "kempower" ? "kempower:menu" : "autel:menu" }]]),
+        reply_markup: kb([[{ text: "⬅️ Back", callback_data: packMenuCallback(pack) }]]),
       });
     }
 
@@ -1129,63 +1205,44 @@ bot.on("callback_query", async (q) => {
   }
 
   if (data.startsWith("r:mfr:")) {
-    const mfr = data.split(":")[2]; // autel | kempower
+    const mfr = data.split(":")[2]; // autel | kempower | tritium
     setReport(chatId, {
       data: {
         manufacturer: mfr,
         faultId: "",
         faultTitle: "",
         faultSummary: "",
-        actionOptions: [], // reset until a fault is selected
+        actionOptions: [],
         actions: [],
       },
     });
     return askFault(chatId);
   }
 
-  // Selecting a fault from /report flow -> inject fault-specific checklist (NEW)
+  // Selecting a fault from /report flow -> inject fault-specific checklist
   if (data.startsWith("r:fault:")) {
-    const parts = data.split(":"); // r:fault:AUTEL:<id> OR r:fault:KEMPOWER:<id>
-    const type = parts[2];
+    const parts = data.split(":"); // r:fault:AUTEL:<id> OR r:fault:KEMPOWER:<id> OR r:fault:TRITIUM:<id>
+    const type = parts[2]; // AUTEL/KEMPOWER/TRITIUM
     const id = parts[3];
 
-    if (type === "AUTEL") {
-      const f = getFaultById("autel", id);
-      const t = getReportTemplateFromFault(f) || defaultReportTemplate();
+    const pack =
+      type === "KEMPOWER" ? "kempower" : type === "TRITIUM" ? "tritium" : "autel";
 
-      setReport(chatId, {
-        data: {
-          manufacturer: "autel",
-          faultId: String(id),
-          faultTitle: f ? f.title : `Autel Fault (${id})`,
-          faultSummary: String(t.summary || "").trim(),
-          actionOptions: normalizeStringArray(t.actions), // fault-specific
-          actions: [],
-        },
-      });
+    const f = getFaultById(pack, id);
+    const t = getReportTemplateFromFault(f) || defaultReportTemplate();
 
-      return askActions(chatId);
-    }
+    setReport(chatId, {
+      data: {
+        manufacturer: pack,
+        faultId: String(id),
+        faultTitle: f ? f.title : `${cap(pack)} Fault (${id})`,
+        faultSummary: String(t.summary || "").trim(),
+        actionOptions: normalizeStringArray(t.actions),
+        actions: [],
+      },
+    });
 
-    if (type === "KEMPOWER") {
-      const f = getFaultById("kempower", id);
-      const t = getReportTemplateFromFault(f) || defaultReportTemplate();
-
-      setReport(chatId, {
-        data: {
-          manufacturer: "kempower",
-          faultId: String(id),
-          faultTitle: f ? f.title : `Kempower Fault (${id})`,
-          faultSummary: String(t.summary || "").trim(),
-          actionOptions: normalizeStringArray(t.actions), // fault-specific
-          actions: [],
-        },
-      });
-
-      return askActions(chatId);
-    }
-
-    return;
+    return askActions(chatId);
   }
 
   if (data.startsWith("r:act:")) {
@@ -1243,6 +1300,11 @@ bot.on("callback_query", async (q) => {
     return showKempowerMenu(chatId, messageId);
   }
 
+  if (data === "tritium:menu") {
+    resetDt(chatId);
+    return showTritiumMenu(chatId, messageId);
+  }
+
   // ------------------- FAULT SELECTION -------------------
   if (data.startsWith("AUTEL:")) {
     const id = data.split(":")[1];
@@ -1276,6 +1338,23 @@ bot.on("callback_query", async (q) => {
     }
 
     return showFaultCard({ chatId, messageId, pack: "kempower", fault });
+  }
+
+  if (data.startsWith("TRITIUM:")) {
+    const id = data.split(":")[1];
+    const fault = getFaultById("tritium", id);
+
+    if (!fault) {
+      resetDt(chatId);
+      return upsertMessage(chatId, {
+        messageId,
+        text: "Fault not found.",
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "⬅️ Back", callback_data: "tritium:menu" }]] },
+      });
+    }
+
+    return showFaultCard({ chatId, messageId, pack: "tritium", fault });
   }
 
   // ignore unknown callback data

@@ -1,0 +1,1252 @@
+# tritium.yml
+# EVBot Fault Pack: Tritium (On-site Technician v1) — Descriptive + Tuned (nodes-based)
+# Notes:
+# - Node-based decision tree: start_node + nodes map
+# - Each node has: prompt, options -> next
+# - image: tritium/<filename_without_extension> (expects files in assets/images/tritium/*.png)
+
+faults:
+
+  - id: tritium_plc_offline
+    platform: tritium
+    charger_type: dc
+    title: "PLC / Controller Offline (Tritium)"
+    aliases:
+      - "PLC offline"
+      - "controller offline"
+      - "charger offline"
+      - "no comms"
+      - "UI not responding"
+      - "unit not responding"
+      - "cannot connect"
+    triggers:
+      any_text_contains:
+        - "plc offline"
+        - "controller offline"
+        - "charger offline"
+        - "no comms"
+        - "not responding"
+        - "offline"
+    severity: high
+    tags: [comms, plc, controller, ethernet, router, reboot, ocpp]
+
+    description: >
+      The charger is not communicating (controller/PLC offline) or appears unresponsive.
+      Most commonly caused by site network issues, modem/router registration problems,
+      controller boot faults, or power/control supply issues.
+
+    likely_causes:
+      - Site network down / switch port disabled / VLAN mismatch
+      - Bad Ethernet patch lead or loose RJ45
+      - Modem/router not registered / poor signal / carrier issue
+      - Controller not booting correctly after outage
+      - Control PSU issue causing unstable electronics
+
+    safety_notes:
+      - Follow site rules before power cycling; apply LOTO if accessing cabinets
+      - Most comms checks can be done without entering HV compartments
+
+    tools_required:
+      - Known-good Ethernet patch lead
+      - Access to CSMS / backend (if available)
+      - Phone for hotspot test (if permitted)
+
+    response:
+      telegram_markdown: |
+        *Tritium — PLC/Controller Offline*
+        The charger is unresponsive or not communicating.
+
+        Most common causes:
+        • Network/VLAN/switch port issue
+        • Bad Ethernet lead / loose RJ45
+        • Modem registration / signal issue
+        • Controller boot fault after outage
+        • Control PSU instability
+
+    report_template:
+      summary: >
+        Charger found offline/unresponsive. Physical comms and power checks were completed and recovery steps
+        were attempted to restore communications and normal operation.
+      actions:
+        - "Verified UI state and any visible alarms"
+        - "Checked Ethernet link lights and reseated connections"
+        - "Swapped to known-good patch lead (where possible)"
+        - "Verified switch/router port status and network path"
+        - "Performed controlled reboot/power cycle per site procedure"
+        - "Confirmed CSMS last-seen status (where available)"
+        - "Escalated with evidence if communication not restored"
+      parts_used:
+        - "Ethernet patch lead (if replaced)"
+      verification:
+        - "Charger online/connected (or escalation lodged with evidence)"
+
+    decision_tree:
+      start_node: TPLC0
+      nodes:
+        TPLC0:
+          prompt: |
+            *PLC / Controller Offline — Start*
+            Is the UI powered and showing anything (even an error screen)?
+          options:
+            - label: "✅ UI is on"
+              next: TPLC1
+            - label: "❌ Completely dead"
+              next: TPLC_DEAD
+
+        TPLC1:
+          prompt: |
+            *Check comms link*
+            Can you see link/activity lights on the Ethernet port/switch/router?
+          options:
+            - label: "✅ Link lights present"
+              next: TPLC2
+            - label: "❌ No link lights"
+              next: TPLC3
+
+        TPLC2:
+          prompt: |
+            *Backend check (if available)*
+            Does the CSMS show the charger connected recently?
+          options:
+            - label: "✅ Connected recently"
+              next: TPLC4
+            - label: "❌ Offline for a long time"
+              next: TPLC3
+
+        TPLC3:
+          prompt: |
+            *Physical comms checks*
+            Reseat Ethernet at both ends, verify correct port/VLAN, and try a known-good patch lead.
+          options:
+            - label: "Done — comms restored"
+              next: TPLC_DONE
+            - label: "Still offline"
+              next: TPLC5
+
+        TPLC4:
+          prompt: |
+            *Controlled reboot*
+            Perform a controlled reboot/power cycle (site rules permitting). Does it come back online?
+          options:
+            - label: "✅ Online after reboot"
+              next: TPLC_DONE
+            - label: "❌ Still offline"
+              next: TPLC5
+
+        TPLC5:
+          prompt: |
+            *Escalate with evidence*
+            Next checks typically require logs/internal status. Collect evidence and escalate to Tritium support.
+          options:
+            - label: "Collect evidence"
+              next: TPLC_ESC
+            - label: "Back to start"
+              next: TPLC0
+
+        TPLC_DEAD:
+          prompt: |
+            *Unit dead*
+            Confirm AC supply present, upstream breakers OK, and control supply status if safe to check.
+          options:
+            - label: "Supply issue found"
+              next: TPLC_DONE
+            - label: "Supply OK — still dead"
+              next: TPLC_ESC
+
+        TPLC_ESC:
+          prompt: |
+            *Escalation pack*
+            Include: site name, serial, photos of screen/LEDs, breaker states, CSMS last-seen, and fault text/timestamps.
+          options:
+            - label: "Done"
+              next: TPLC_DONE
+
+        TPLC_DONE:
+          prompt: |
+            *Complete*
+            ✅ PLC/Offline flow complete. If still offline after comms + reboot checks, escalate with evidence.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_precharge_contactor_fault
+    platform: tritium
+    charger_type: dc
+    title: "Pre-charge / Contactor Fault (Tritium)"
+    aliases:
+      - "precharge fault"
+      - "contactor fault"
+      - "main contactor"
+      - "contactor feedback"
+      - "failed to close"
+      - "welded contactor"
+    triggers:
+      any_text_contains:
+        - "precharge"
+        - "contactor"
+        - "failed to close"
+        - "welded"
+        - "contactor feedback"
+    severity: high
+    tags: [power, contactor, precharge, interlock, hv, safety]
+
+    description: >
+      The charger cannot complete pre-charge or verify contactor closure/feedback.
+      Usually caused by interlock inhibits, PSU undervoltage/supply sag during pull-in,
+      wiring/feedback issues, or a failed contactor.
+
+    likely_causes:
+      - Interlock/safety chain inhibiting closure (HVIL, doors, E-stop)
+      - Control PSU undervoltage or supply sag during pull-in
+      - Coil wiring / auxiliary feedback wiring faults
+      - Precharge path issue (OEM-specific components)
+      - Failed/welded contactor
+
+    safety_notes:
+      - LOTO before cabinet access; verify safe state before touching HV components
+      - Do not bypass safety chain or IMD-related protections
+
+    tools_required:
+      - Multimeter (true RMS preferred)
+      - Insulated hand tools
+
+    response:
+      telegram_markdown: |
+        *Tritium — Pre-charge / Contactor Fault*
+        The charger cannot pre-charge or verify contactor closure.
+
+        Most common causes:
+        • Interlock/HVIL/E-stop inhibit
+        • PSU undervoltage / supply sag
+        • Coil or aux feedback wiring fault
+        • Failed/welded contactor
+
+    report_template:
+      summary: >
+        Pre-charge/contactor fault identified. Safety chain, control power stability, and feedback wiring
+        were checked to restore reliable contactor operation.
+      actions:
+        - "Applied LOTO and verified safe state"
+        - "Checked safety chain / HVIL / E-stop status"
+        - "Observed contactor close attempt behaviour (silent/clicking/chatter)"
+        - "Checked control supply stability during pull-in"
+        - "Inspected/secured coil wiring and aux feedback wiring"
+        - "Power cycled and re-tested charging session"
+        - "Escalated with logs if fault persisted"
+      parts_used:
+        - "Contactor (if replaced)"
+      verification:
+        - "No active faults present"
+        - "Successful charge session confirmed"
+
+    decision_tree:
+      start_node: TCON0
+      nodes:
+        TCON0:
+          prompt: |
+            *Pre-charge / Contactor Fault — Start*
+            Does it happen immediately at start (before ramp), or mid-charge?
+          options:
+            - label: "Start of session"
+              next: TCON1
+            - label: "Mid-charge"
+              next: TCON6
+
+        TCON1:
+          prompt: |
+            *Safety chain first*
+            Confirm E-stop reset and all interlocks/HVIL closed (doors, safety loop).
+          options:
+            - label: "Interlock was open — fixed"
+              next: TCON_RETEST
+            - label: "All interlocks OK"
+              next: TCON2
+
+        TCON2:
+          prompt: |
+            *Contactor behaviour*
+            Do you hear a close attempt / repeated clicking?
+          options:
+            - label: "Repeated clicking/chatter"
+              next: TCON3
+            - label: "Silent / no attempt"
+              next: TCON4
+            - label: "Single clunk but fault remains"
+              next: TCON5
+
+        TCON3:
+          prompt: |
+            *Chatter / weak pull-in*
+            Most commonly undervoltage/sag or failing contactor. Check control PSU and supply quality.
+          options:
+            - label: "Voltage sag/PSU issue"
+              next: TCON_FIX_PSU
+            - label: "Voltage stable"
+              next: TCON_ESC
+
+        TCON4:
+          prompt: |
+            *No attempt*
+            Could be controller inhibit, open safety chain, or control supply issue. Re-check interlocks and control PSU stability.
+          options:
+            - label: "Interlock issue"
+              next: TCON_RETEST
+            - label: "PSU/control power issue"
+              next: TCON_FIX_PSU
+            - label: "Still unclear"
+              next: TCON_ESC
+
+        TCON5:
+          prompt: |
+            *Closes but not verified*
+            Suspect aux feedback mismatch or contactor feedback wiring.
+          options:
+            - label: "Fix feedback wiring"
+              next: TCON_RETEST
+            - label: "Escalate"
+              next: TCON_ESC
+
+        TCON6:
+          prompt: |
+            *Mid-charge trip*
+            Often linked to cooling/module instability causing protective trips. Check cooling/power module faults.
+          options:
+            - label: "Check cooling/module faults"
+              next: TCON_ESC
+            - label: "Escalate"
+              next: TCON_ESC
+
+        TCON_FIX_PSU:
+          prompt: |
+            *Fix PSU / supply sag*
+            Address unstable control power or supply sag during pull-in (connections, PSU health, upstream quality). Then re-test.
+          options:
+            - label: "Re-test"
+              next: TCON_RETEST
+
+        TCON_RETEST:
+          prompt: |
+            *Re-test*
+            Power cycle (if required) and re-test a charging session.
+          options:
+            - label: "Resolved"
+              next: TCON_DONE
+            - label: "Still faulting"
+              next: TCON_ESC
+
+        TCON_ESC:
+          prompt: |
+            *Escalate to Tritium*
+            Include: interlock/HVIL status, contactor behaviour, PSU/supply findings, and timestamps/logs.
+          options:
+            - label: "Back to start"
+              next: TCON0
+
+        TCON_DONE:
+          prompt: |
+            *Complete*
+            ✅ Pre-charge/Contactor flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_power_module_fault
+    platform: tritium
+    charger_type: dc
+    title: "Power Module Fault / Module Offline (Tritium)"
+    aliases:
+      - "power module fault"
+      - "module offline"
+      - "derated"
+      - "derate"
+      - "rectifier fault"
+    triggers:
+      any_text_contains:
+        - "power module"
+        - "module offline"
+        - "derated"
+        - "derate"
+        - "rectifier"
+    severity: high
+    tags: [power_module, rectifier, derate, dc_bus, comms, cooling]
+
+    description: >
+      One or more power modules are offline or faulted, often causing reduced output (derate) or unavailable state.
+      Start with simple reseat/connection checks where permitted, then assess cooling/thermal conditions and escalate.
+
+    likely_causes:
+      - Module not seated correctly / connector not latched
+      - Internal module failure
+      - Cooling/thermal trip causing module shutdown
+      - Module-to-controller comms fault
+      - Site events (outage/surge) leading to module faults
+
+    safety_notes:
+      - LOTO before cabinet access; verify safe state before handling modules
+      - Do not remove covers or access HV areas without authorisation/training
+
+    tools_required:
+      - Torch / inspection light
+      - Basic hand tools (if permitted)
+      - Multimeter (as required)
+
+    response:
+      telegram_markdown: |
+        *Tritium — Power Module Fault / Module Offline*
+        One or more modules are offline causing derate or unavailable state.
+
+        Common causes:
+        • Module not seated / connection issue
+        • Cooling/thermal trip
+        • Module failure or comms fault
+        • Outage/surge related event
+
+    report_template:
+      summary: >
+        Power module fault/derate identified. Module seating/connection and cooling basics were checked and
+        the charger was re-tested under load. Escalation completed if module remained offline.
+      actions:
+        - "Applied LOTO and verified safe state"
+        - "Identified affected module(s) (status/slot if visible)"
+        - "Reseated module connections where permitted"
+        - "Checked cooling basics (filters/vents/fans/ambient conditions)"
+        - "Power cycled and re-tested output under load"
+        - "Escalated with module details and logs if fault persisted"
+      parts_used:
+        - "Power module (if replaced by OEM process)"
+      verification:
+        - "Stable output / no active module faults (or escalation lodged)"
+
+    decision_tree:
+      start_node: TPM0
+      nodes:
+        TPM0:
+          prompt: |
+            *Power Module Fault — Start*
+            Is the charger derated (reduced kW) or unavailable?
+          options:
+            - label: "Derated"
+              next: TPM1
+            - label: "Unavailable"
+              next: TPM2
+
+        TPM1:
+          prompt: |
+            *Derate*
+            Derate usually indicates one or more modules offline. Can you identify a specific module/slot?
+          options:
+            - label: "Yes — module identified"
+              next: TPM3
+            - label: "No — not sure"
+              next: TPM4
+
+        TPM2:
+          prompt: |
+            *Unavailable*
+            If fully unavailable, check if multiple modules are offline OR another inhibit is present. Continue to evidence + escalation if needed.
+          options:
+            - label: "Continue"
+              next: TPM4
+
+        TPM3:
+          prompt: |
+            *Reseat (if permitted)*
+            Reseat the identified module connections (LOTO/safe state) and re-test.
+          options:
+            - label: "Resolved"
+              next: TPM_DONE
+            - label: "Still offline"
+              next: TPM4
+
+        TPM4:
+          prompt: |
+            *Cooling basics*
+            Thermal issues commonly cause module faults. Check filters/vents/fans and site ventilation/ambient conditions.
+          options:
+            - label: "Cooling issue found — fixed"
+              next: TPM_RETEST
+            - label: "Cooling looks OK"
+              next: TPM_ESC
+
+        TPM_RETEST:
+          prompt: |
+            *Re-test*
+            Re-test under load and confirm output stability.
+          options:
+            - label: "Resolved"
+              next: TPM_DONE
+            - label: "Still faulting"
+              next: TPM_ESC
+
+        TPM_ESC:
+          prompt: |
+            *Escalate to Tritium*
+            Include: affected modules/slots, derate level, cooling observations, site conditions, and timestamps/logs.
+          options:
+            - label: "Back to start"
+              next: TPM0
+
+        TPM_DONE:
+          prompt: |
+            *Complete*
+            ✅ Power Module flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_overtemp_cooling_fault
+    platform: tritium
+    charger_type: dc
+    title: "Overtemperature / Cooling Fault (Tritium)"
+    severity: high
+    tags: [cooling, overtemp, fans, filters, derate, thermal]
+
+    description: >
+      The charger is exceeding thermal limits or detecting inadequate cooling, causing derate or shutdown.
+      Tritium cooling differs by model family:
+      - RT / PK are commonly air-cooled (filters/vents/fans are primary checks)
+      - RTM uses a liquid cooling loop (coolant pump/flow/level/leaks become primary checks)
+
+    likely_causes:
+      - RT/PK: dirty/blocked filters, fan failure, poor ventilation, sun load
+      - RTM: coolant pump not running, low flow, low coolant level/air in system, leaks, flow/temp sensor faults
+      - High ambient temperature / direct sun load
+      - Recirculation due to poor cabinet clearance / blocked vents
+
+    safety_notes:
+      - Start with external airflow checks where possible
+      - If RTM coolant faults are suspected, do not keep re-trying sessions (risk of damage)
+      - Apply LOTO before accessing internal fans/pump/coolant components
+
+    tools_required:
+      - Torch / inspection light
+      - IR thermometer (optional)
+      - Photos for escalation evidence
+
+    response:
+      telegram_markdown: |
+        *Tritium — Overtemperature / Cooling Fault*
+        First identify the model family:
+        • RT / PK → air cooling (filters/fans/vents)
+        • RTM → liquid cooling (coolant pump/flow/level/leaks)
+
+    decision_tree:
+      start_node: TCOOL0
+      nodes:
+        TCOOL0:
+          prompt: |
+            *Overtemperature / Cooling — Start*
+            Which Tritium model family are you working on?
+            (If unsure, use the hints in the next step.)
+          options:
+            - label: "RT / PK (air-cooled)"
+              next: TCOOL_AIR_0
+            - label: "RTM (liquid-cooled)"
+              next: TCOOL_RTM_0
+            - label: "Not sure"
+              next: TCOOL_ID_0
+
+        TCOOL_ID_0:
+          prompt: |
+            *Identify RT/PK vs RTM (quick hints)*
+            Choose the best match:
+            • If you can clearly identify a coolant reservoir/hoses/pump loop → likely *RTM*
+            • If the cabinet relies mainly on filters/vents/fans (no coolant loop visible) → likely *RT/PK*
+          options:
+            - label: "Looks like RTM (coolant loop)"
+              next: TCOOL_RTM_0
+            - label: "Looks like RT/PK (fans/filters)"
+              next: TCOOL_AIR_0
+            - label: "Still unsure"
+              next: TCOOL_ESC
+
+        # -------------------------
+        # RT / PK air-cooled path
+        # -------------------------
+        TCOOL_AIR_0:
+          prompt: |
+            *RT/PK Air Cooling Checks*
+            Start with filters/vents and airflow. Are filters/vents blocked or dirty?
+          options:
+            - label: "Dirty/blocked — cleaned"
+              next: TCOOL_AIR_RETEST
+            - label: "Looks clean"
+              next: TCOOL_AIR_1
+
+        TCOOL_AIR_1:
+          prompt: |
+            *Check fans*
+            Confirm fans run freely, no obstructions, and airflow feels correct.
+          options:
+            - label: "Fans OK"
+              next: TCOOL_AIR_2
+            - label: "Fan not running / blocked"
+              next: TCOOL_AIR_FIX_FAN
+
+        TCOOL_AIR_2:
+          prompt: |
+            *Site conditions*
+            Consider sun load/ambient temperature and ventilation clearance. If still derating, escalate with readings.
+          options:
+            - label: "Conditions corrected"
+              next: TCOOL_AIR_RETEST
+            - label: "Still derating/faulting"
+              next: TCOOL_ESC
+
+        TCOOL_AIR_FIX_FAN:
+          prompt: |
+            *Fix fan issue*
+            Clear obstruction, check connectors, replace fan if failed (per OEM). Then re-test.
+          options:
+            - label: "Re-test"
+              next: TCOOL_AIR_RETEST
+
+        TCOOL_AIR_RETEST:
+          prompt: |
+            *Re-test (RT/PK)*
+            Run a short test session and confirm temperatures stabilise and output returns.
+          options:
+            - label: "Resolved"
+              next: TCOOL_DONE
+            - label: "Still faulting"
+              next: TCOOL_ESC
+
+        # -------------------------
+        # RTM liquid-cooled path
+        # IMPORTANT: stay inside this SAME decision_tree (no cross-fault jumps)
+        # -------------------------
+        TCOOL_RTM_0:
+          prompt: |
+            *RTM Liquid Cooling Checks*
+            Does the alarm text mention coolant / pump / flow / low level / leak?
+          options:
+            - label: "Yes (coolant/pump/flow related)"
+              next: TCOOL_RTM_PUMP_0
+            - label: "No (just overtemp)"
+              next: TCOOL_RTM_1
+            - label: "Not sure"
+              next: TCOOL_RTM_PUMP_0
+
+        TCOOL_RTM_1:
+          prompt: |
+            *RTM overtemp behaviour*
+            Does overtemp/derate happen very quickly (seconds–minutes) after start?
+            Rapid overtemp on RTM strongly suggests coolant flow failure.
+          options:
+            - label: "Rapid (seconds–minutes)"
+              next: TCOOL_RTM_PUMP_0
+            - label: "Gradual"
+              next: TCOOL_RTM_PUMP_0
+
+        TCOOL_RTM_PUMP_0:
+          prompt: |
+            *Coolant / pump / flow path*
+            Can you confirm the coolant pump runs during startup / when cooling demand occurs?
+          options:
+            - label: "✅ Pump runs"
+              next: TCOOL_RTM_PUMP_1
+            - label: "❌ Pump not running"
+              next: TCOOL_RTM_ESC
+            - label: "Not sure"
+              next: TCOOL_RTM_PUMP_2
+
+        TCOOL_RTM_PUMP_1:
+          prompt: |
+            *Pump runs*
+            Check for low coolant level or leaks (if reservoir/lines are visible).
+            If level/leaks are OK but alarms persist → likely flow sensor / coolant temp sensor / control interpretation.
+          options:
+            - label: "Leak / low coolant found"
+              next: TCOOL_RTM_ESC
+            - label: "No leak / level OK"
+              next: TCOOL_RTM_ESC
+            - label: "⬅️ Back"
+              next: TCOOL_RTM_0
+
+        TCOOL_RTM_PUMP_2:
+          prompt: |
+            *Pump check (quick method)*
+            If safe and permitted: listen/feel near pump area during startup.
+            If overtemp happens rapidly (seconds–minutes), assume flow failure and escalate.
+          options:
+            - label: "Pump confirmed running"
+              next: TCOOL_RTM_PUMP_1
+            - label: "Pump not running"
+              next: TCOOL_RTM_ESC
+            - label: "Still unsure"
+              next: TCOOL_RTM_ESC
+
+        TCOOL_RTM_ESC:
+          prompt: |
+            *Escalate RTM coolant/flow fault*
+            Include:
+            • Whether the pump runs
+            • Any leak or coolant level observations
+            • Photos of reservoir, hoses, pump area (if visible)
+            • Exact fault text and timestamps/logs
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TCOOL_ESC:
+          prompt: |
+            *Escalate thermal fault*
+            Include: model family (RT/PK vs RTM), ambient conditions, filter/fan observations OR coolant observations,
+            derate level, and log timestamps/fault text.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TCOOL_DONE:
+          prompt: |
+            *Complete*
+            ✅ Cooling/Overtemp flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_safety_chain_open
+    platform: tritium
+    charger_type: dc
+    title: "E-stop / Safety Chain Open (Tritium)"
+    severity: medium
+    tags: [safety, interlock, estop, hvil, access]
+
+    description: >
+      The safety chain is open (E-stop, HVIL, door interlock, safety loop), preventing charging.
+      Start by confirming E-stop reset and all access points/interlocks are closed and latched.
+
+    likely_causes:
+      - E-stop pressed/not reset
+      - Door/cover not latched
+      - HVIL loop open due to harness/connector issue
+      - Interlock switch misaligned/damaged
+
+    safety_notes:
+      - Do not bypass interlocks or HVIL
+      - Apply LOTO if cabinet access is required to inspect switches/harness
+
+    tools_required:
+      - Torch / inspection light
+      - Basic hand tools (if required)
+
+    decision_tree:
+      start_node: TSAFE0
+      nodes:
+        TSAFE0:
+          prompt: |
+            *Safety Chain Open — Start*
+            Confirm E-stop released/reset and all doors/covers are closed and latched.
+          options:
+            - label: "Resolved"
+              next: TSAFE_DONE
+            - label: "Still active"
+              next: TSAFE1
+
+        TSAFE1:
+          prompt: |
+            *Inspect interlocks/HVIL*
+            Check interlock switches for misalignment/damage and inspect visible HVIL/safety harness connections.
+          options:
+            - label: "Fixed / restored continuity"
+              next: TSAFE_DONE
+            - label: "Still not fixed"
+              next: TSAFE_ESC
+
+        TSAFE_ESC:
+          prompt: |
+            *Escalate safety chain*
+            Include: which interlock suspected, photos of latches/switches, and alarm text/timestamps.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TSAFE_DONE:
+          prompt: |
+            *Complete*
+            ✅ Safety Chain flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_dc_isolation_fault
+    platform: tritium
+    charger_type: dc
+    title: "DC Isolation / IMD / Ground Fault (Tritium)"
+    severity: high
+    tags: [safety, isolation, imd, ground_fault, hv]
+
+    description: >
+      Isolation/IMD/ground faults are safety-critical and prevent charging.
+      Determine whether the fault is connector/lead-specific (moisture/damage) or present across all outputs
+      (internal leakage/IMD detect), then escalate.
+
+    likely_causes:
+      - Moisture ingress in connector/lead
+      - Damaged cable insulation or contamination
+      - Internal leakage path in charger
+      - IMD detection fault / sensor circuit issue
+
+    safety_notes:
+      - Do not bypass IMD/isolation protections
+      - Remove damaged wet leads from service and escalate
+
+    tools_required:
+      - Torch / inspection light
+      - Dry cloth/compressed air (if permitted)
+      - Evidence photos for escalation
+
+    decision_tree:
+      start_node: TISO0
+      nodes:
+        TISO0:
+          prompt: |
+            *Isolation / IMD — Start*
+            Does it occur on one connector/lead only, or all outputs?
+          options:
+            - label: "One connector/lead"
+              next: TISO1
+            - label: "All connectors"
+              next: TISO2
+
+        TISO1:
+          prompt: |
+            *Lead-specific*
+            Inspect connector/lead for moisture, damage, contamination. Dry/clean if permitted; remove from service if damaged. Then re-test.
+          options:
+            - label: "Resolved"
+              next: TISO_DONE
+            - label: "Still faulting"
+              next: TISO_ESC
+
+        TISO2:
+          prompt: |
+            *All outputs*
+            Likely internal leakage/IMD detect. Escalate with logs/evidence (do not bypass).
+          options:
+            - label: "Escalate"
+              next: TISO_ESC
+            - label: "Done"
+              next: TISO_DONE
+
+        TISO_ESC:
+          prompt: |
+            *Escalate isolation fault*
+            Include: weather/moisture notes, which outputs affected, connector photos, and alarm text/timestamps.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TISO_DONE:
+          prompt: |
+            *Complete*
+            ✅ Isolation/IMD flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_handle_temp_sensor_fault
+    platform: tritium
+    charger_type: dc
+    title: "Connector / Handle Temperature Sensor Fault (Tritium)"
+    severity: medium
+    tags: [connector, thermal, sensor, safety, derate]
+
+    description: >
+      The charger is detecting an abnormal connector/handle temperature sensor reading or overtemperature.
+      Often lead-specific (damaged handle, sensor, pin heating, contamination) and may cause derate or shutdown.
+
+    likely_causes:
+      - Damaged handle temp sensor wiring
+      - Contamination/pin damage causing heating
+      - Loose/damaged connector pins
+      - Excessive ambient heat/sun load increasing handle temps
+
+    safety_notes:
+      - If overheating is suspected, remove the lead from service and escalate
+      - Do not continue repeated sessions if connector heating is present
+
+    tools_required:
+      - Torch / inspection light
+      - IR thermometer (optional)
+
+    decision_tree:
+      start_node: THT0
+      nodes:
+        THT0:
+          prompt: |
+            *Handle Temp Sensor — Start*
+            Is it happening on one lead/connector only?
+          options:
+            - label: "One lead"
+              next: THT1
+            - label: "All leads"
+              next: THT2
+
+        THT1:
+          prompt: |
+            *Inspect lead*
+            Check strain relief, pins, contamination, damage. If persistent, mark lead out-of-service and escalate.
+          options:
+            - label: "Resolved"
+              next: THT_DONE
+            - label: "Escalate"
+              next: THT_ESC
+
+        THT2:
+          prompt: |
+            *All leads affected*
+            Suggests controller/harness interpretation issue. Escalate with evidence.
+          options:
+            - label: "Escalate"
+              next: THT_ESC
+            - label: "Done"
+              next: THT_DONE
+
+        THT_ESC:
+          prompt: |
+            *Escalate handle temp*
+            Include: which connector, photos of pins/handle, session screenshot, and timestamps.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        THT_DONE:
+          prompt: |
+            *Complete*
+            ✅ Handle Temp flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_connector_proximity_pilot_fault
+    platform: tritium
+    charger_type: dc
+    title: "Connector Not Detected / CP-PP Fault (Tritium)"
+    severity: medium
+    tags: [connector, cp, pp, pilot, proximity, hardware]
+
+    description: >
+      The charger is not detecting the connector correctly (CP/PP/proximity/pilot-related fault),
+      preventing a session from starting. Often lead-specific and related to pin damage, contamination,
+      latch issues, or cable/handle wear.
+
+    likely_causes:
+      - Pin damage/contamination in connector
+      - Handle latch not engaging correctly
+      - Cable strain/inner conductor damage near handle
+      - Lead-specific harness fault
+
+    safety_notes:
+      - If connector pins are damaged or overheating, remove lead from service
+      - Avoid repeated attempts that may worsen arcing/pin damage
+
+    tools_required:
+      - Torch / inspection light
+      - Known-good test vehicle (optional)
+
+    decision_tree:
+      start_node: TCPP0
+      nodes:
+        TCPP0:
+          prompt: |
+            *Connector Not Detected — Start*
+            Is it happening on one connector only?
+          options:
+            - label: "One connector"
+              next: TCPP1
+            - label: "All connectors"
+              next: TCPP2
+
+        TCPP1:
+          prompt: |
+            *Inspect connector*
+            Inspect pins/contamination, latch function, strain relief. Try known-good vehicle if possible.
+          options:
+            - label: "Resolved"
+              next: TCPP_DONE
+            - label: "Still faulting"
+              next: TCPP_ESC
+
+        TCPP2:
+          prompt: |
+            *All outputs affected*
+            Suggests common control/harness fault. Escalate with evidence.
+          options:
+            - label: "Escalate"
+              next: TCPP_ESC
+            - label: "Done"
+              next: TCPP_DONE
+
+        TCPP_ESC:
+          prompt: |
+            *Escalate CP/PP*
+            Include: connector photos, which lead, any related alarms, and test vehicle details.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TCPP_DONE:
+          prompt: |
+            *Complete*
+            ✅ Connector detection flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+  - id: tritium_ocpp_authorisation_failed
+    platform: tritium
+    charger_type: dc
+    title: "OCPP / Authorisation Failed (Tritium)"
+    severity: medium
+    tags: [ocpp, backend, rfid, csms, auth, comms]
+
+    description: >
+      The backend (OCPP/CSMS) is rejecting authorisation or transactions.
+      Determine whether it affects all users/cards or one specific user/token, then troubleshoot backend connectivity
+      and account/allowlist issues accordingly.
+
+    likely_causes:
+      - Backend connectivity or session handshake issue
+      - Time sync/DNS issues impacting TLS/OCPP
+      - Token/RFID not provisioned or blocked
+      - Backend rules or allowlist misconfiguration
+
+    safety_notes:
+      - Low risk; mostly backend/config checks
+
+    tools_required:
+      - CSMS access (if available)
+      - Known-good RFID/token (optional)
+
+    decision_tree:
+      start_node: TAUTH0
+      nodes:
+        TAUTH0:
+          prompt: |
+            *Authorisation Failed — Start*
+            Does it happen for all users/cards or only one?
+          options:
+            - label: "All users/cards"
+              next: TAUTH1
+            - label: "One user/card"
+              next: TAUTH2
+
+        TAUTH1:
+          prompt: |
+            *All users failing*
+            Suggests backend connectivity/config. Check comms/online status and escalate with timestamps.
+          options:
+            - label: "Check PLC/Offline flow"
+              next: __MENU_TRITIUM__
+            - label: "Escalate"
+              next: TAUTH_ESC
+
+        TAUTH2:
+          prompt: |
+            *Single user failing*
+            Test a known-good token/app and verify allowlist/provisioning.
+          options:
+            - label: "Resolved"
+              next: TAUTH_DONE
+            - label: "Still failing"
+              next: TAUTH_ESC
+
+        TAUTH_ESC:
+          prompt: |
+            *Escalate auth fault*
+            Include: timestamps, masked token/RFID ID, charger serial, and screenshots/errors from CSMS.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TAUTH_DONE:
+          prompt: |
+            *Complete*
+            ✅ Authorisation flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_payment_terminal_fault
+    platform: tritium
+    charger_type: dc
+    title: "Payment Terminal / Reader Fault (Tritium)"
+    severity: low
+    tags: [payment, reader, modem, comms, retail]
+
+    description: >
+      The payment terminal/reader is offline or not functioning (tap/insert not working).
+      Determine whether charging still works via app/RFID. If only the terminal is affected, focus on terminal power/comms
+      and escalate to the payment vendor if required.
+
+    likely_causes:
+      - Terminal power issue
+      - Modem/SIM/antenna/signal issue affecting terminal connectivity
+      - Payment vendor outage
+      - Terminal firmware fault
+
+    safety_notes:
+      - Low risk; avoid opening payment hardware unless authorised
+
+    tools_required:
+      - CSMS/payment portal access (if available)
+      - Photos/screenshots for vendor escalation
+
+    decision_tree:
+      start_node: TPAY0
+      nodes:
+        TPAY0:
+          prompt: |
+            *Payment Terminal Fault — Start*
+            Is charging still possible via app/RFID even if the terminal is down?
+          options:
+            - label: "✅ Yes, charging still works"
+              next: TPAY1
+            - label: "❌ No, everything is down"
+              next: TPAY2
+
+        TPAY1:
+          prompt: |
+            *Terminal-only fault*
+            Check terminal power and comms (SIM/router/signal) and reset per site policy. Escalate to payment vendor if required.
+          options:
+            - label: "Resolved"
+              next: TPAY_DONE
+            - label: "Escalate"
+              next: TPAY_ESC
+
+        TPAY2:
+          prompt: |
+            *Wider outage*
+            Treat as comms/controller issue first (charger offline). Follow PLC/Offline checks then escalate.
+          options:
+            - label: "Go to PLC/Offline"
+              next: __MENU_TRITIUM__
+            - label: "Escalate"
+              next: TPAY_ESC
+
+        TPAY_ESC:
+          prompt: |
+            *Escalate payment fault*
+            Include: terminal model, SIM status/signal notes (if known), screenshots, last transaction time.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+        TPAY_DONE:
+          prompt: |
+            *Complete*
+            ✅ Payment Terminal flow complete.
+          options:
+            - label: "Tritium menu"
+              next: __MENU_TRITIUM__
+
+
+  - id: tritium_rtm_coolant_system_fault
+    platform: tritium
+    charger_type: dc
+    title: "RTM Coolant System / Pump / Flow Fault (Tritium)"
+    severity: high
+    tags: [cooling, coolant, pump, rtm, liquid_cooling, thermal, derate]
+
+    description: >
+      RTM units use a liquid cooling loop. Coolant system faults (pump/flow/level/leak) can cause rapid derate or shutdown
+      to protect power electronics.
+
+    likely_causes:
+      - Coolant pump not running (electrical supply or mechanical failure)
+      - Low flow / flow sensor fault
+      - Low coolant level / air in system
+      - Coolant leak (internal or external)
+      - Coolant temperature sensor fault / controller interpretation
+
+    safety_notes:
+      - Do not run repeated sessions if coolant faults persist
+      - Inspect for leaks before re-energising
+      - Apply LOTO before accessing pump/coolant components
+
+    tools_required:
+      - Torch / inspection light
+      - Hearing/feel check to confirm pump operation
+      - Photos for escalation
+
+    decision_tree:
+      start_node: RTC0
+      nodes:
+        RTC0:
+          prompt: |
+            *RTM Coolant System Fault — Start*
+            Can you confirm the coolant pump runs during startup / when cooling demand occurs?
+          options:
+            - label: "✅ Pump runs"
+              next: RTC1
+            - label: "❌ Pump not running"
+              next: RTC2
+            - label: "Not sure"
+              next: RTC3
+
+        RTC1:
+          prompt: |
+            *Pump runs*
+            Check for low coolant level or leaks (if reservoir/lines are visible), then consider
+            flow sensor or controller interpretation faults if the issue persists.
+          options:
+            - label: "Leak / low coolant found"
+              next: RTC_ESC
+            - label: "No leak / level OK"
+              next: RTC4
+
+        RTC2:
+          prompt: |
+            *Pump not running*
+            Treat as high priority. Likely pump supply, control, or mechanical failure.
+            Do not continue operation — escalate with evidence.
+          options:
+            - label: "Escalate"
+              next: RTC_ESC
+
+        RTC3:
+          prompt: |
+            *Pump check (quick method)*
+            If safe and permitted: listen or feel near the pump area during startup.
+            If overtemp happens rapidly (seconds–minutes), assume coolant flow failure.
+          options:
+            - label: "Pump confirmed running"
+              next: RTC1
+            - label: "Pump not running"
+              next: RTC2
+            - label: "Still unsure"
+              next: RTC_ESC
+
+        RTC4:
+          prompt: |
+            *Sensor / control suspicion*
+            Pump runs and coolant level appears OK, but the fault persists.
+            This strongly suggests a flow sensor, coolant temperature sensor,
+            or controller interpretation issue.
+          options:
+            - label: "Escalate"
+              next: RTC_ESC
+            - label: "⬅️ Back"
+              next: RTC0
+
+        RTC_ESC:
+          prompt: |
+            *Escalate RTM coolant fault*
+            Include:
+            • Whether the pump runs
+            • Any leak or coolant level observations
+            • Photos of reservoir, hoses, pump area (if visible)
+            • Exact fault text and timestamps/logs
+          options:
+            - label: "🏠 Tritium menu"
+              next: __MENU_TRITIUM__
