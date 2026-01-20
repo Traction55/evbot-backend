@@ -306,6 +306,102 @@ async function upsertPhotoOrText(chatId, opts) {
   return upsertMessage(chatId, { chatId, messageId, text, parse_mode, reply_markup });
 }
 
+/**
+ * ===========================
+ * REPORT CHECKLIST (MFR + FAULT AWARE)
+ * ===========================
+ * These drive the /report checkbox list shown in Telegram.
+ * - Base checklist is manufacturer-specific
+ * - Addons are fault-specific (based on faultId)
+ */
+
+const REPORT_CHECKLIST = {
+  kempower: {
+    base: [
+      { key: "k_loto", label: "🔒 LOTO / isolation applied" },
+      { key: "k_visual", label: "👀 Visual inspection (burn marks, water ingress, loose lugs)" },
+      { key: "k_power_cycle", label: "🔁 Controlled power cycle performed" },
+      { key: "k_fw_check", label: "🧠 Firmware / versions checked" },
+      { key: "k_logs", label: "🗂️ Alarms/logs reviewed + timestamps captured" },
+    ],
+  },
+
+  autel: {
+    base: [
+      { key: "a_loto", label: "🔒 LOTO / isolation applied" },
+      { key: "a_visual", label: "👀 Visual inspection (wiring, contactors, heat marks)" },
+      { key: "a_input_power", label: "⚡ Input power verified (3φ voltage/rotation)" },
+      { key: "a_power_cycle", label: "🔁 Power cycle performed" },
+      { key: "a_fw_check", label: "🧠 Firmware checked / updated if required" },
+      { key: "a_logs", label: "🗂️ Fault logs reviewed + timestamps captured" },
+    ],
+  },
+
+  tritium: {
+    base: [
+      { key: "t_loto", label: "🔒 LOTO / isolation applied" },
+      { key: "t_visual", label: "👀 Visual inspection (filters, fans, heat marks, lugs)" },
+      { key: "t_input_power", label: "⚡ Supply verified (AC/DC as applicable)" },
+      { key: "t_power_cycle", label: "🔁 Power cycle performed (with discharge wait)" },
+      { key: "t_fw_check", label: "🧠 Firmware / versions checked" },
+      { key: "t_logs", label: "🗂️ Alarms/logs reviewed + timestamps captured" },
+    ],
+  },
+};
+
+const REPORT_FAULT_ADDONS = {
+  // Kempower merged power module tree
+  kempower_power_module_cluster: [
+    { key: "kpm_reseat", label: "🔌 Reseated PMCs / checked connectors fully latched" },
+    { key: "kpm_swap_slots", label: "🧩 Swapped slots/modules to see if fault follows" },
+    { key: "kpm_cb_fuse", label: "⚡ Checked CB/fuses and upstream supply stability" },
+    { key: "kpm_burnt_wiring", label: "🔥 Checked for burnt wiring / heat damage in rack" },
+    { key: "kpm_config", label: "⚙️ Config checked (PMC/DPDM detected correctly)" },
+  ],
+};
+
+function uniqueStrings(arr) {
+  const out = [];
+  const seen = new Set();
+  for (const v of arr) {
+    const s = String(v || "").trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out;
+}
+
+function getManufacturerChecklistLabels(manufacturer) {
+  const mf = String(manufacturer || "").toLowerCase();
+  const base = REPORT_CHECKLIST[mf]?.base || [];
+  return base.map((x) => x.label);
+}
+
+function getFaultAddonLabels(faultId) {
+  const fid = String(faultId || "").trim();
+  const addons = fid ? REPORT_FAULT_ADDONS[fid] || [] : [];
+  return addons.map((x) => x.label);
+}
+
+/**
+ * Build the actionOptions list used by the report wizard.
+ * Priority order:
+ * 1) Manufacturer base checklist
+ * 2) Fault addons (by faultId)
+ * 3) YAML report_template.actions (appended, deduped)
+ * 4) If all empty -> fallback REPORT_ACTION_OPTIONS
+ */
+function buildReportActionOptions({ manufacturer, faultId, yamlActions }) {
+  const mfBase = getManufacturerChecklistLabels(manufacturer);
+  const faultAdd = getFaultAddonLabels(faultId);
+  const y = Array.isArray(yamlActions) ? yamlActions : [];
+  const merged = uniqueStrings([...mfBase, ...faultAdd, ...y]);
+  return merged;
+}
+
 // ------------------- STATE -------------------
 const reportState = new Map();
 
@@ -684,14 +780,20 @@ async function startReport(chatId) {
   });
 }
 
-// Start report with manufacturer+fault prefilled + fault-specific actions (NEW)
+// Start report with manufacturer+fault prefilled + manufacturer+fault checklist (NEW)
 async function startReportFromFault(chatId, pack, fault) {
   const t = getReportTemplateFromFault(fault) || defaultReportTemplate();
+
+  const actionOptionsBuilt = buildReportActionOptions({
+    manufacturer: pack,
+    faultId: String(fault?.id || ""),
+    yamlActions: normalizeStringArray(t.actions),
+  });
 
   setReport(chatId, {
     step: "site",
     data: {
-      actionOptions: normalizeStringArray(t.actions),
+      actionOptions: actionOptionsBuilt,
       actions: [],
       manufacturer: pack,
       faultId: String(fault?.id || ""),
@@ -781,7 +883,7 @@ async function askFault(chatId) {
   });
 }
 
-// Fallback generic checklist options (used when YAML doesn’t define report_template.actions)
+// Fallback generic checklist options (used when mfr + fault addons + YAML actions are empty)
 const REPORT_ACTION_OPTIONS = [
   "Firmware update performed",
   "Power cycle performed",
@@ -1024,7 +1126,7 @@ bot.on("message", async (msg) => {
 
   if (st.step === "site") {
     setReport(chatId, { data: { site: text } });
-    return askAssetId(chatId);
+    return
   }
 
   if (st.step === "assetId") {
@@ -1111,7 +1213,7 @@ bot.on("callback_query", async (q) => {
     return showManufacturerMenu(chatId, messageId);
   }
 
-  // ✅ FIX: handle "<pack>:menu" BEFORE generic ":" handling (prevents misroutes)
+  // ✅ handle "<pack>:menu" BEFORE generic ":" handling
   if (data.endsWith(":menu")) {
     const pack = data.split(":")[0].toLowerCase();
     resetDt(chatId);
@@ -1120,7 +1222,7 @@ bot.on("callback_query", async (q) => {
     return showAutelMenu(chatId, messageId);
   }
 
-  // Report from fault card / decision tree (autofill + fault-specific actions)
+  // Report from fault card / decision tree (autofill + manufacturer+fault checklist)
   if (data.startsWith("RF|")) {
     const [, pack, faultId] = data.split("|");
     const fault = getFaultById(pack, faultId);
@@ -1183,20 +1285,29 @@ bot.on("callback_query", async (q) => {
 
   if (data.startsWith("r:mfr:")) {
     const mfr = data.split(":")[2]; // autel | kempower | tritium
+
+    // Build base checklist immediately when manufacturer is chosen (even before fault)
+    const actionOptionsBuilt = buildReportActionOptions({
+      manufacturer: mfr,
+      faultId: "",
+      yamlActions: [],
+    });
+
     setReport(chatId, {
       data: {
         manufacturer: mfr,
         faultId: "",
         faultTitle: "",
         faultSummary: "",
-        actionOptions: [],
+        actionOptions: actionOptionsBuilt,
         actions: [],
       },
     });
+
     return askFault(chatId);
   }
 
-  // Selecting a fault from /report flow -> inject fault-specific checklist
+  // Selecting a fault from /report flow -> inject manufacturer base + fault addons + YAML actions
   if (data.startsWith("r:fault:")) {
     const parts = data.split(":"); // r:fault:AUTEL:<id> OR r:fault:KEMPOWER:<id> OR r:fault:TRITIUM:<id>
     const type = parts[2]; // AUTEL/KEMPOWER/TRITIUM
@@ -1207,13 +1318,19 @@ bot.on("callback_query", async (q) => {
     const f = getFaultById(pack, id);
     const t = getReportTemplateFromFault(f) || defaultReportTemplate();
 
+    const actionOptionsBuilt = buildReportActionOptions({
+      manufacturer: pack,
+      faultId: String(id),
+      yamlActions: normalizeStringArray(t.actions),
+    });
+
     setReport(chatId, {
       data: {
         manufacturer: pack,
         faultId: String(id),
         faultTitle: f ? f.title : `${cap(pack)} Fault (${id})`,
         faultSummary: String(t.summary || "").trim(),
-        actionOptions: normalizeStringArray(t.actions),
+        actionOptions: actionOptionsBuilt,
         actions: [],
       },
     });
@@ -1266,7 +1383,6 @@ bot.on("callback_query", async (q) => {
   }
 
   // ------------------- FAULT SELECTION (STRICT PACK ROUTING) -------------------
-  // ✅ FIX: these now ALWAYS use correct pack loader
   if (data.startsWith("AUTEL:")) {
     const id = data.split(":")[1];
     const fault = getFaultById("autel", id);
