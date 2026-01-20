@@ -1,614 +1,965 @@
-# autel.yml
-# EVBot Fault Pack: Autel (On-site Technician v1) — Descriptive + Tuned (nodes-based)
-# Notes:
-# - Node-based decision tree: start_node + nodes map
-# - Each node has: prompt, options -> next
-# - Keep IDs stable so your bot can deep-link
+# kempower.yml
+# EVBot Fault Pack: Kempower (Top 12 by impact / frequency style)
+# Source: Kempower Error Codes Rev 2.00 (09-2025)
 
 faults:
 
-  - id: autel_ac_contactor_fault
-    platform: autel
+  - id: kempower_power_module_fault
+    platform: kempower
     charger_type: dc
-    title: "AC Contactor Fault (Autel DC)"
-    aliases:
-      - "AC Contactor Fault"
-      - "AC contactor error"
-      - "input contactor fault"
-      - "main contactor fault"
-      - "contactor open feedback"
-      - "contactor feedback error"
-
-    triggers:
-      any_text_contains:
-        - "ac contactor"
-        - "contactor fault"
-        - "contactor feedback"
-        - "input contactor"
-        - "main contactor"
-
+    title: "Power Module / Power Stack Fault (PMC / DPDM)"
     severity: high
-    tags: [power, input, contactor, interlock, feedback, three_phase]
+    tags: [power, module, pmc, dpdm, rectifier, derate]
 
     description: >
-      The charger cannot close or verify the main AC input contactor.
-      Most commonly caused by missing/unstable 3-phase supply, undervoltage on the control PSU,
-      an open interlock, coil/aux wiring issues, or a failed contactor.
-
-    likely_causes:
-      - Missing phase / supply imbalance or sag during pull-in
-      - Low control PSU voltage / undervoltage
-      - Interlock open (door, E-stop chain, safety loop)
-      - Coil wiring / auxiliary feedback wiring loose or damaged
-      - Failed contactor (coil/mechanism/contacts)
+      One or more power modules or power stack controllers are offline or faulted.
+      This commonly results in derating or the charger becoming unavailable.
 
     safety_notes:
-      - LOTO before opening cabinet; wait minimum 5 minutes for DC bus discharge
-      - Verify absence of voltage with an approved meter before touching conductors
-
-    tools_required:
-      - Multimeter (true RMS preferred)
-      - Insulated hand tools
-
-    response:
-      telegram_markdown: |
-        *Autel DC — AC Contactor Fault*
-        The charger cannot close or verify the main AC input contactor.
-
-        Most common causes:
-        • Missing phase / imbalance
-        • Low control PSU voltage
-        • Aux feedback or coil wiring fault
-        • Interlock open
-        • Failed contactor
+      - Follow site LOTO and Kempower safety procedures before cabinet access
+      - Do not reseat or move modules unless authorised/trained
+      - Do not re-energise if signs of damage or overheating are present
 
     decision_tree:
-      start_node: A0
+      start_node: KPM0
       nodes:
-        A0:
-          prompt: |
-            *AC Contactor Fault — Start*
-            Is the fault active right now, or only intermittent?
-          options:
-            - label: "Fault active"
-              next: A1
-            - label: "Intermittent"
-              next: A2
 
-        A1:
+        KPM0:
           prompt: |
-            *Check site supply*
-            Confirm 3-phase is present and stable (no missing phase/major imbalance).
+            *Power Module / Power Stack Fault — Start*
+            Is the charger derated (reduced output) or fully unavailable?
           options:
-            - label: "Supply OK"
-              next: A3
-            - label: "Missing phase"
-              next: FIX_SUPPLY
+            - label: "Derated (reduced kW)"
+              next: KPM1
+            - label: "Unavailable / won’t start"
+              next: KPM1
 
-        A2:
+        KPM1:
           prompt: |
-            *Intermittent pattern*
-            Treat this like a supply/connection/PSU sag issue until proven otherwise. Continue through checks.
+            *Initial visual & electrical checks*
+            Perform safe external checks:
+            • Any breakers or fuses tripped?
+            • Any visible alarms on cabinets?
+            • Any obvious burning smell, discoloration, or damage?
           options:
-            - label: "Continue"
-              next: A1
+            - label: "Breaker/fuse issue found"
+              next: KPM_FIX_BREAKER
+            - label: "Visible damage or burning"
+              next: KPM_ESC_DANGER
+            - label: "No obvious issues"
+              next: KPM2
 
-        A3:
+        KPM_FIX_BREAKER:
           prompt: |
-            *Power cycle & check pull-in*
-            Power cycle and listen/observe: does the AC contactor pull in cleanly?
+            *Breaker / supply recovery*
+            Reset tripped breakers/fuses once only (if permitted).
+            Monitor closely during restart.
           options:
-            - label: "Cleared"
-              next: MONITOR
-            - label: "No pull-in"
-              next: A4
-            - label: "Chatter"
-              next: A5
-            - label: "Clunks but fault remains"
-              next: A6
+            - label: "Recovered"
+              next: KPM_DONE
+            - label: "Trips again / still faulting"
+              next: KPM_ESC
 
-        A4:
+        KPM2:
           prompt: |
-            *No pull-in*
-            Work out whether it’s being *blocked* (interlock), *not commanded* (no coil voltage),
-            or *failed* (coil voltage present but no pull-in).
-          image: autel/ac_contactor_location
+            *Power cycle recovery*
+            Perform a controlled power cycle of the station per site procedure.
+            Allow full shutdown and restart.
           options:
-            - label: "Interlock open"
-              next: FIX_INTERLOCK
-            - label: "No coil voltage"
-              next: A7
-            - label: "Voltage present"
-              next: REPLACE_CONTACTOR
-
-        A5:
-          prompt: |
-            *Chatter / weak pull-in*
-            Usually undervoltage (supply sag / weak control PSU) or a failing contactor.
-          options:
-            - label: "Voltage sag"
-              next: FIX_PSU_OR_SUPPLY
-            - label: "Voltage OK"
-              next: REPLACE_CONTACTOR
-
-        A6:
-          prompt: |
-            *Clunks but fault remains*
-            Contactor may be moving, but the system can’t verify it. Focus on aux feedback circuit.
-          image: autel/aux_feedback_terminals
-          options:
-            - label: "Feedback fault"
-              next: FIX_AUX_FEEDBACK
-            - label: "Feedback OK"
-              next: A8
-
-        A7:
-          prompt: |
-            *No coil command*
-            No coil voltage typically points to PSU undervoltage, an open interlock, wiring break, or controller output issue.
-          image: autel/control_psu_location
-          options:
-            - label: "PSU / undervoltage"
-              next: FIX_PSU_OR_SUPPLY
-            - label: "Interlock"
-              next: FIX_INTERLOCK
-            - label: "Wiring"
-              next: FIX_WIRING
-            - label: "Controller"
-              next: ESCALATE_AUTEL
-
-        A8:
-          prompt: |
-            *Firmware / config check*
-            If supply/pull-in/feedback look OK but it still faults, check firmware/config/logs then escalate if needed.
-          options:
-            - label: "Resolved"
-              next: MONITOR
+            - label: "Recovered after power cycle"
+              next: KPM_DONE
             - label: "Still faulting"
-              next: ESCALATE_AUTEL
+              next: KPM3
 
-        FIX_SUPPLY:
+        KPM3:
           prompt: |
-            *Fix supply issue*
-            Restore correct 3-phase supply (phase present, within spec, balanced). Then re-test.
+            *Module / slot identification*
+            Can you identify a specific cabinet, slot, or module reporting a fault?
           options:
-            - label: "Re-test"
-              next: A3
+            - label: "Yes — specific module/slot"
+              next: KPM4
+            - label: "No — unclear"
+              next: KPM5
 
-        FIX_INTERLOCK:
+        KPM4:
           prompt: |
-            *Fix interlock*
-            Identify which interlock is open (door, E-stop chain, safety loop) and restore continuity. Then re-test.
-          image: autel/interlock_chain_points
+            *Module reseat / slot isolation (if authorised)*
+            If permitted:
+            • Apply LOTO
+            • Reseat the affected module
+            • Inspect connectors for burning, bent pins, contamination
           options:
-            - label: "Re-test"
-              next: A3
+            - label: "Damage found"
+              next: KPM_ESC_DANGER
+            - label: "Reseated — re-test"
+              next: KPM_RETEST
+            - label: "Not permitted"
+              next: KPM5
 
-        FIX_AUX_FEEDBACK:
+        KPM5:
           prompt: |
-            *Fix aux feedback*
-            Repair/secure aux feedback wiring and confirm state change during pull-in/pull-out. Then re-test.
+            *Firmware & configuration check*
+            Check:
+            • Station firmware version
+            • Recent updates or rollbacks
+            • DPDM/PMC detected correctly in configuration
           options:
-            - label: "Re-test"
-              next: A3
+            - label: "Firmware/config issue found"
+              next: KPM_ESC
+            - label: "No issues found"
+              next: KPM_ESC
 
-        FIX_PSU_OR_SUPPLY:
-          prompt: |
-            *Fix PSU / undervoltage*
-            Address control PSU undervoltage or supply sag during pull-in (connections, PSU health, upstream quality). Then re-test.
-          options:
-            - label: "Re-test"
-              next: A3
-
-        FIX_WIRING:
-          prompt: |
-            *Fix wiring*
-            Repair/secure coil wiring and related harnessing (loose terminals, damaged conductors, heat issues). Then re-test.
-          options:
-            - label: "Re-test"
-              next: A3
-
-        REPLACE_CONTACTOR:
-          prompt: |
-            *Replace AC contactor*
-            Coil voltage present but no reliable pull-in = likely failed contactor. Replace and function test.
-          options:
-            - label: "Re-test"
-              next: A3
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate to Autel*
-            Include: site voltages, coil command findings, interlock status, feedback checks, and timestamps/logs.
-          options:
-            - label: "Back to start"
-              next: A0
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and monitor for recurrence.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  - id: autel_dc_contactor_fault
-    platform: autel
-    charger_type: dc
-    title: "DC Contactor Fault / Failed to Close (Autel DC)"
-    severity: high
-    tags: [dc, contactor, output, hv, safety]
-
-    description: >
-      The charger is unable to close or verify the DC output contactor.
-      Most causes are interlock inhibits, missing coil command, undervoltage/PSU issues,
-      wiring faults, auxiliary feedback issues, or a failed/welded contactor.
-
-    likely_causes:
-      - Interlock preventing closure
-      - No coil command from controller
-      - Coil wiring/terminals loose or damaged
-      - PSU undervoltage or voltage sag at pull-in
-      - Failed or welded DC contactor / feedback fault
-
-    safety_notes:
-      - LOTO before cabinet access; wait minimum 5 minutes for DC bus discharge
-      - Verify safe state before touching DC contactor/DC bus components
-
-    tools_required:
-      - Multimeter (true RMS preferred)
-      - Insulated hand tools
-
-    decision_tree:
-      start_node: D0
-      nodes:
-        D0:
-          prompt: |
-            *DC Contactor Fault — Start*
-            Is the fault active right now, or intermittent?
-          options:
-            - label: "Fault active"
-              next: D1
-            - label: "Intermittent"
-              next: D2
-
-        D1:
-          prompt: |
-            *Power cycle and observe*
-            Power cycle and observe contactor behaviour (close attempt, pull-in, and whether the fault clears).
-          options:
-            - label: "Cleared"
-              next: MONITOR
-            - label: "No pull-in"
-              next: D3
-            - label: "Closes but faults"
-              next: D6
-
-        D2:
-          prompt: |
-            *Intermittent behaviour*
-            Intermittent faults are often loose wiring, thermal movement, or PSU/supply sag. Continue through checks.
-          options:
-            - label: "Continue"
-              next: D1
-
-        D3:
-          prompt: |
-            *Check coil voltage*
-            Measure whether coil voltage is present during the close command.
-            This tells you if it’s a command/inhibit issue vs contactor/mechanical failure.
-          image: autel/dc_contactor_location
-          options:
-            - label: "No voltage"
-              next: D4
-            - label: "Voltage present"
-              next: REPLACE_CONTACTOR
-            - label: "Voltage sags"
-              next: FIX_PSU
-
-        D4:
-          prompt: |
-            *No coil command*
-            No coil voltage typically points to an interlock inhibit, wiring issue, or controller output fault.
-          options:
-            - label: "Interlock"
-              next: FIX_INTERLOCK
-            - label: "Wiring"
-              next: FIX_WIRING
-            - label: "Controller"
-              next: ESCALATE_AUTEL
-
-        D6:
-          prompt: |
-            *Aux feedback / verification*
-            If it closes but faults, check auxiliary feedback circuit or welded contactor condition.
-          image: autel/aux_feedback_terminals
-          options:
-            - label: "Feedback fault"
-              next: FIX_AUX_FEEDBACK
-            - label: "Welded"
-              next: REPLACE_CONTACTOR
-
-        FIX_PSU:
-          prompt: |
-            *Fix PSU / undervoltage*
-            Address control power stability and confirm voltage holds during pull-in. Then re-test.
-          options:
-            - label: "Re-test"
-              next: D1
-
-        FIX_INTERLOCK:
-          prompt: |
-            *Fix interlock*
-            Identify the open interlock (door, E-stop chain, safety loop) and restore continuity. Then re-test.
-          options:
-            - label: "Re-test"
-              next: D1
-
-        FIX_WIRING:
-          prompt: |
-            *Fix wiring*
-            Repair/secure coil wiring and harness connections (loose terminals, heat damage). Then re-test.
-          options:
-            - label: "Re-test"
-              next: D1
-
-        FIX_AUX_FEEDBACK:
-          prompt: |
-            *Fix aux feedback*
-            Repair/secure auxiliary feedback wiring and confirm state change. Then re-test.
-          options:
-            - label: "Re-test"
-              next: D1
-
-        REPLACE_CONTACTOR:
-          prompt: |
-            *Replace DC contactor*
-            Coil voltage present but unreliable/no operation = likely failed/welded contactor. Replace and function test.
-          options:
-            - label: "Re-test"
-              next: D1
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate to Autel*
-            Include: coil voltage findings, interlock status, wiring checks performed, and timestamps/logs.
-          options:
-            - label: "Back"
-              next: D0
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and monitor for recurrence.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  - id: autel_backend_ocpp_comms_fault
-    platform: autel
-    charger_type: dc
-    title: "Backend / OCPP Communication Fault (Autel DC)"
-    severity: high
-    tags: [ocpp, backend, comms, modem, sim, network]
-
-    description: >
-      The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
-      If basic recovery fails, investigate SIM/APN, carrier/signal issues, DNS/time sync, and backend firewall/whitelisting.
-
-    likely_causes:
-      - SIM not registered on packet data / provisioning issue
-      - Incorrect APN settings
-      - Carrier outage/throttling or poor signal/antenna issue
-      - DNS or time sync issues affecting TLS/OCPP handshake
-      - Backend firewall/whitelist blocking private IP ranges
-
-    safety_notes:
-      - Most checks are low risk and can be done without entering HV compartments
-      - Follow ESD precautions if accessing comms hardware
-
-    tools_required:
-      - Phone/laptop for hotspot testing (if permitted)
-      - Access to APN/back-end requirements
-      - Known-good SIM (optional)
-
-    decision_tree:
-      start_node: C0
-      nodes:
-        C0:
-          prompt: |
-            *Backend / OCPP offline*
-            Confirm offline state and proceed with recovery steps.
-          options:
-            - label: "Continue"
-              next: C1
-
-        C1:
-          prompt: |
-            *Reboot charger*
-            Reboot and allow time for modem registration and OCPP handshake.
-          options:
-            - label: "Online"
-              next: MONITOR
-            - label: "Still offline"
-              next: C2
-
-        C2:
-          prompt: |
-            *Next step*
-            If reboot did not restore comms, either escalate or perform advanced SIM/network checks.
-          options:
-            - label: "📈 Escalate (standard)"
-              next: ESCALATE_AUTEL
-            - label: "🧠 Deep dive — advanced checks"
-              next: ADVANCED_SIM_NETWORK
-
-        ADVANCED_SIM_NETWORK:
-          prompt: |
-            🧠 *Deep Dive — SIM / Network / OCPP*
-            Check these advanced causes:
-            • SIM registered on GSM only (no packet data)
-            • Incorrect APN
-            • Carrier outage or throttling
-            • Private IP blocked by backend firewall
-            • DNS or time sync issues
-          options:
-            - label: "Issue fixed"
-              next: C1
-            - label: "No issue found"
-              next: ESCALATE_AUTEL
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate backend / OCPP*
-            Include: last known online time, signal strength (if available),
-            SIM/APN checks, and any comms errors/log timestamps.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Confirm stable backend connection and monitor for dropouts.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  - id: autel_overtemp_cooling_fault
-    platform: autel
-    charger_type: dc
-    title: "Overtemperature / Cooling Fault (Autel DC)"
-    severity: high
-    tags: [cooling, overtemp, fans, filters]
-
-    description: >
-      Overtemperature indicates the charger is exceeding thermal limits or has detected inadequate cooling.
-      Most common field cause is blocked airflow (dirty filters/vents). Fan faults or poor ventilation can also trigger it.
-
-    likely_causes:
-      - Dirty/blocked filters or intake vents
-      - Fan failure or obstruction
-      - Poor cabinet ventilation / recirculation
-      - High ambient temperature / direct sun load
-
-    safety_notes:
-      - Start with external airflow/filter checks where possible
-      - Follow LOTO requirements for internal fan inspection
-
-    tools_required:
-      - Torch / inspection light
-      - Basic hand tools for filter access (if required)
-      - IR thermometer (optional)
-
-    decision_tree:
-      start_node: T0
-      nodes:
-        T0:
-          prompt: |
-            *Overtemperature detected*
-            Start with airflow checks and filter condition.
-          options:
-            - label: "Check airflow"
-              next: T1
-
-        T1:
-          prompt: |
-            *Filters dirty?*
-            Inspect filters/vents for blockage.
-          options:
-            - label: "Yes"
-              next: FIX_FILTERS
-            - label: "No"
-              next: ESCALATE_AUTEL
-
-        FIX_FILTERS:
-          prompt: |
-            *Clean filters*
-            Clean/replace filters, then re-test under load.
-          options:
-            - label: "Re-test"
-              next: MONITOR
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate thermal fault*
-            Include: ambient conditions, fan operation observations, and any temp/log readings.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and monitor for recurrence.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  - id: autel_power_module_fault
-    platform: autel
-    charger_type: dc
-    title: "Power Module Fault / Module Offline (Autel DC)"
-    severity: high
-    tags: [power_module, rectifier, dc_bus, comms, cooling]
-
-    description: >
-      A power module is offline or reporting a module fault. Start with reseating to rule out poor seating or connection.
-      If it remains offline, suspect module failure, cooling trip, or controller/comms issue.
-
-    likely_causes:
-      - Module not seated correctly / loose connections
-      - Internal comms issue between module and controller
-      - Cooling-related trip (fan/airflow/filter)
-      - Failed power module
-
-    safety_notes:
-      - LOTO before access; wait minimum 5 minutes for DC bus discharge
-      - Verify safe state before handling modules
-
-    tools_required:
-      - Torch / inspection light
-      - Basic hand tools for access
-      - Multimeter (as needed)
-
-    decision_tree:
-      start_node: P0
-      nodes:
-        P0:
-          prompt: |
-            *Power module offline*
-            Reseat the affected module to rule out poor seating/connection.
-          options:
-            - label: "Reseat module"
-              next: P1
-
-        P1:
+        KPM_RETEST:
           prompt: |
             *Re-test*
-            Confirm whether the module returns online after reseat.
+            Re-energise and run a short charging session.
+            Monitor output stability and fault recurrence.
           options:
             - label: "Resolved"
-              next: MONITOR
+              next: KPM_DONE
+            - label: "Still faulting"
+              next: KPM_ESC
+
+        KPM_ESC_DANGER:
+          prompt: |
+            *⚠️ Escalate immediately — unsafe condition*
+            Do NOT re-energise.
+            Evidence required:
+            • Photos of damage/burn marks
+            • Affected cabinet/module
+            • Error codes and timestamps
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KPM_ESC:
+          prompt: |
+            *Escalate — Power Module / Stack Fault*
+            Include:
+            • Exact error codes/messages
+            • Affected cabinet/module/slot
+            • Derate level (kW)
+            • Actions already attempted
+            • Firmware version
+            • Photos/screenshots
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KPM_DONE:
+          prompt: |
+            *Complete*
+            ✅ Power module troubleshooting complete.
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_no_heartbeat
+    platform: kempower
+    charger_type: dc
+    title: "Satellite / Control Unit Offline (No Communication)"
+
+    aliases: ["no heartbeat", "satellite offline", "control unit offline"]
+    triggers:
+      any_text_contains: ["NO_HEARTBEAT", "no heartbeat"]
+    severity: high
+    tags: [network, ethernet, satellite, control_unit, offline]
+
+    description: >
+      Satellite/Control Unit is configured but not available on the local network. :contentReference[oaicite:0]{index=0}
+
+    decision_tree:
+      start_node: KHB0
+      nodes:
+        KHB0:
+          prompt: |
+            *NO_HEARTBEAT — Start*
+            Is it *one* Satellite/Control Unit, or *all* of them?
+          options:
+            - label: "Only one satellite"
+              next: KHB1
+            - label: "All satellites"
+              next: KHB2
+
+        KHB1:
+          prompt: |
+            *Single satellite issue*
+            Check 24V supply at the Satellite/Control Unit (23–25VDC) and inspect RJ45 cabling/termination.
+            If needed, inspect RJ45 extension block connections and flat cable to the display.
+          options:
+            - label: "Power/ethernet fixed → retest"
+              next: KHB3
             - label: "Still offline"
-              next: ESCALATE_AUTEL
+              next: KHB_ESC
+          # From Kempower steps: measure 23–25VDC, check RJ45 cabling + extension block :contentReference[oaicite:1]{index=1}
 
-        ESCALATE_AUTEL:
+        KHB2:
           prompt: |
-            *Escalate power module*
-            Include: module ID/slot, any LEDs/error codes, actions taken (reseat), and timestamps/logs.
+            *System-wide issue*
+            Check network links between main/secondary cabinets and inside control module (omega board ↔ Ethernet switch).
+            With multi-cabinet units, confirm cabinet GND terminal blocks are jumpered.
           options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
+            - label: "Fixed → retest"
+              next: KHB3
+            - label: "Still offline"
+              next: KHB_ESC
+          # From Kempower steps: multi-cabinet checks, GND jumper, main↔secondary links :contentReference[oaicite:2]{index=2}
 
-        MONITOR:
+        KHB3:
           prompt: |
-            *Monitor*
-            Run a test session and confirm stable module operation.
+            *Re-test*
+            Restart charger and confirm heartbeat returns.
           options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
+            - label: "Done"
+              next: __MENU_KEMPOWER__
+
+        KHB_ESC:
+          prompt: |
+            *Escalate*
+            Provide: which satellite(s), 24V measurement result, cabling checks performed, and timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_comm_not_ready
+    platform: kempower
+    charger_type: dc
+    title: "Vehicle Communication Failed (CCS Control Pilot Not Ready)"
+
+    aliases: ["comm not ready", "ccs not ready", "control pilot fault"]
+    triggers:
+      any_text_contains: ["COMM_NOT_READY", "comm_not_ready"]
+    severity: high
+    tags: [ccs, control_pilot, connector, startup]
+
+    description: >
+      CCS not available; Control Pilot (CP) in fault state during startup. :contentReference[oaicite:3]{index=3}
+
+    decision_tree:
+      start_node: KCP0
+      nodes:
+        KCP0:
+          prompt: |
+            *COMM_NOT_READY — Start*
+            Is this after recent install/commissioning work or hardware changes?
+          options:
+            - label: "Yes (recent changes)"
+              next: KCP1
+            - label: "No (sudden fault)"
+              next: KCP2
+
+        KCP1:
+          prompt: |
+            *Commissioning / wiring path*
+            Restart the charger and verify CP pin is connected correctly.
+            If hardware mismatch is suspected, replace optional CCS card with newer revision.
+          options:
+            - label: "Resolved"
+              next: KCP_DONE
+            - label: "Still failing"
+              next: KCP_ESC
+          # From doc: restart, connect CP pin correctly, replace CCS card revision :contentReference[oaicite:4]{index=4}
+
+        KCP2:
+          prompt: |
+            *Sudden fault path*
+            Restart the charger. If persists, treat as CCS card / CP wiring integrity issue and escalate with photos/notes.
+          options:
+            - label: "Resolved"
+              next: KCP_DONE
+            - label: "Still failing"
+              next: KCP_ESC
+
+        KCP_DONE:
+          prompt: |
+            *Complete*
+            ✅ CCS/CP flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KCP_ESC:
+          prompt: |
+            *Escalate*
+            Provide: connector ID, CP wiring check result, any recent work, and timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_rcm_bad
+    platform: kempower
+    charger_type: ac
+    title: "Earth Leakage Detected (Residual Current Monitor Trip)"
+
+    aliases: ["rcm bad", "residual current leak", "earth leakage"]
+    triggers:
+      any_text_contains: ["RCM_BAD", "rcm_bad"]
+    severity: high
+    tags: [safety, rcd, rcm, earth_leakage, type2]
+
+    description: >
+      Residual current monitor detected a leak to protective earth (PE); connector disabled for safety. :contentReference[oaicite:5]{index=5}
+
+    decision_tree:
+      start_node: KRCM0
+      nodes:
+        KRCM0:
+          prompt: |
+            *RCM_BAD — Start*
+            Did it occur once only, possibly after rain/moisture?
+          options:
+            - label: "Yes (single event)"
+              next: KRCM1
+            - label: "Repeating"
+              next: KRCM2
+
+        KRCM1:
+          prompt: |
+            *Single event*
+            Restart charger. If needed, shut off AC main power supply and turn back ON, then re-test.
+          options:
+            - label: "Resolved"
+              next: KRCM_DONE
+            - label: "Still present"
+              next: KRCM2
+
+        KRCM2:
+          prompt: |
+            *Repeating / persistent*
+            Find source of leakage:
+            - Measure insulation resistance between all phases and PE (follow local safety rules).
+            If insulation is OK, replace the RCM.
+          options:
+            - label: "Escalate (need support)"
+              next: KRCM_ESC
+            - label: "Done"
+              next: KRCM_DONE
+          # From doc: insulation resistance check, replace RCM if measurements OK :contentReference[oaicite:6]{index=6}
+
+        KRCM_DONE:
+          prompt: |
+            *Complete*
+            ✅ RCM flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KRCM_ESC:
+          prompt: |
+            *Escalate*
+            Provide: weather/moisture notes, IR results, photos of connector/port, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_afe_communication_error
+    platform: kempower
+    charger_type: dc
+    title: "Grid Input Stage Communication Fault (AFE Internal Comms)"
+    aliases: ["afe communication error", "pmc comms bus error"]
+    triggers:
+      any_text_contains: ["AFE_COMMUNICATION_ERROR", "afe_communication_error"]
+    severity: medium
+    tags: [pmc, afe, firmware, comms]
+
+    description: >
+      PMC internal communication bus error; PMC temporarily unavailable; reduced power in cabinet. :contentReference[oaicite:7]{index=7}
+
+    decision_tree:
+      start_node: KAFE0
+      nodes:
+        KAFE0:
+          prompt: |
+            *AFE_COMMUNICATION_ERROR — Start*
+            Is this a one-off or frequent/repeating?
+          options:
+            - label: "One-off"
+              next: KAFE1
+            - label: "Repeating"
+              next: KAFE2
+
+        KAFE1:
+          prompt: |
+            *One-off*
+            If it appears once, no action is typically necessary. Monitor.
+          options:
+            - label: "Back to menu"
+              next: __MENU_KEMPOWER__
+
+        KAFE2:
+          prompt: |
+            *Repeating*
+            Update firmware/software to latest release and escalate if it continues.
+          options:
+            - label: "Escalate"
+              next: KAFE_ESC
+            - label: "Back"
+              next: __MENU_KEMPOWER__
+
+        KAFE_ESC:
+          prompt: |
+            *Escalate*
+            Provide: frequency, cabinet/module affected, firmware version, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_fan_current
+    platform: kempower
+    charger_type: dc
+    title: "Cooling Fan Electrical Fault (Fan Current Out of Range)"
+    aliases: ["fan current", "fan fault", "thermal performance reduced"]
+    triggers:
+      any_text_contains: ["FAN_CURRENT", "fan_current"]
+    severity: medium
+    tags: [fan, cooling, airflow, firmware, pmc]
+
+    description: >
+      Fan current out of range; output reduced and thermal performance reduced. :contentReference[oaicite:8]{index=8}
+
+    decision_tree:
+      start_node: KFN0
+      nodes:
+        KFN0:
+          prompt: |
+            *FAN_CURRENT — Start*
+            Is airflow obstructed / filters dirty / fan noise present?
+          options:
+            - label: "Yes"
+              next: KFN1
+            - label: "No / unsure"
+              next: KFN2
+
+        KFN1:
+          prompt: |
+            *Airflow path*
+            Clear obstructions, check filters, confirm fans spin freely and are not noisy.
+            If needed, replace fans.
+          options:
+            - label: "Resolved"
+              next: KFN_DONE
+            - label: "Still failing"
+              next: KFN_ESC
+
+        KFN2:
+          prompt: |
+            *Standard recovery*
+            Remote restart → local restart → remote fault analysis. Update software to latest.
+            If persists, schedule site visit / replace fans.
+          options:
+            - label: "Escalate"
+              next: KFN_ESC
+            - label: "Done"
+              next: KFN_DONE
+
+        KFN_DONE:
+          prompt: |
+            *Complete*
+            ✅ Fan flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KFN_ESC:
+          prompt: |
+            *Escalate*
+            Provide: cabinet/module, fan noise/airflow notes, software version, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_primary_undervoltage
+    platform: kempower
+    charger_type: dc
+    title: "Incoming Supply Too Low (Undervoltage / Phase Issue)"
+    aliases: ["primary undervoltage", "supply too low"]
+    triggers:
+      any_text_contains: ["PRIMARY_UNDERVOLTAGE", "primary_undervoltage"]
+    severity: high
+    tags: [grid, supply, undervoltage, wiring, pmc]
+
+    description: >
+      Primary circuit voltage too low; reduced power available; can relate to supply insufficiency or wiring/module issues. :contentReference[oaicite:9]{index=9}
+
+    decision_tree:
+      start_node: KUV0
+      nodes:
+        KUV0:
+          prompt: |
+            *PRIMARY_UNDERVOLTAGE — Start*
+            Is site/grid voltage actually low (measure under load if possible)?
+          options:
+            - label: "Yes (grid low)"
+              next: KUV1
+            - label: "No / unknown"
+              next: KUV2
+
+        KUV1:
+          prompt: |
+            *Grid-side issue*
+            Confirm supply is sufficient for the unit; escalate to electricity distributor if needed.
+          options:
+            - label: "Back to menu"
+              next: __MENU_KEMPOWER__
+
+        KUV2:
+          prompt: |
+            *Charger-side checks*
+            Check PMC breaker ON, inspect rear connector pins (not bent/broken), move module to another slot and see if fault follows.
+            If fault follows module → replace module.
+          options:
+            - label: "Resolved"
+              next: KUV_DONE
+            - label: "Still failing"
+              next: KUV_ESC
+          # From doc: breaker, connector pins, swap slot, replace if follows :contentReference[oaicite:10]{index=10}
+
+        KUV_DONE:
+          prompt: |
+            *Complete*
+            ✅ Undervoltage flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KUV_ESC:
+          prompt: |
+            *Escalate*
+            Provide: measured L-L voltages under load, which PMC slot, connector inspection result.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_rt_pmc_unavailable
+    platform: kempower
+    charger_type: dc
+    title: "Power Module Controller Offline (PMC Not Communicating)"
+    aliases: ["rt pmc unavailable", "pmc not communicating"]
+    triggers:
+      any_text_contains: ["RT_PMC_UNAVAILABLE", "rt_pmc_unavailable"]
+    severity: high
+    tags: [pmc, canbus, 24v, fuse, config, comms]
+
+    description: >
+      Power Module is in configuration but not communicating; output reduced by 25kW. :contentReference[oaicite:11]{index=11}
+
+    decision_tree:
+      start_node: KPU0
+      nodes:
+        KPU0:
+          prompt: |
+            *Power Module Controller Offline*
+            After restart, is the PMC still missing/unavailable?
+          options:
+            - label: "Yes"
+              next: KPU1
+            - label: "No"
+              next: KPU_DONE
+
+        KPU1:
+          prompt: |
+            *Local checks*
+            Confirm module install matches configuration, check status LEDs for 24V supply, reset AUX fuse if tripped.
+            Inspect connector pins for damage; check airflow/filters.
+          options:
+            - label: "Resolved"
+              next: KPU_DONE
+            - label: "Still failing"
+              next: KPU2
+
+        KPU2:
+          prompt: |
+            *Hardware path*
+            Update software to latest; consider bus divider in control module; replace PMC if required.
+          options:
+            - label: "Escalate"
+              next: KPU_ESC
+            - label: "Back"
+              next: __MENU_KEMPOWER__
+
+        KPU_DONE:
+          prompt: |
+            *Complete*
+            ✅ PMC unavailable flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KPU_ESC:
+          prompt: |
+            *Escalate*
+            Provide: PMC slot, 24V/LED status, AUX fuse status, photos of rear connector pins, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_rt_relaycard_missing
+    platform: kempower
+    charger_type: dc
+    title: "Power Distribution Module Missing (DPDM Not Detected)"
+    aliases: ["rt relaycard missing", "dpdm missing"]
+    triggers:
+      any_text_contains: ["RT_RELAYCARD_MISSING", "rt_relaycard_missing"]
+    severity: high
+    tags: [dpdm, dynamic, ethernet, cabinet, comms]
+
+    description: >
+      Unit configured as dynamic but no DPDM found; comms loss between cabinets; damaged pins/connectors or defective DPDM. :contentReference[oaicite:12]{index=12}
+
+    decision_tree:
+      start_node: KDP0
+      nodes:
+        KDP0:
+          prompt: |
+            *RT_RELAYCARD_MISSING — Start*
+            Is this a multi-cabinet / dynamic system with secondary cabinets present?
+          options:
+            - label: "Yes"
+              next: KDP1
+            - label: "Not sure"
+              next: KDP1
+
+        KDP1:
+          prompt: |
+            *Comms & connectors*
+            Check Ethernet wiring between cabinets and try a different port on cabinet switch.
+            Inspect DPDM connector pins + cabinet connectors (no bent/broken pins).
+          options:
+            - label: "Resolved"
+              next: KDP_DONE
+            - label: "Still failing"
+              next: KDP2
+
+        KDP2:
+          prompt: |
+            *DPDM isolate / swap*
+            If secondary cabinets exist, you may run reduced capacity by removing PMCs from affected cabinet in config.
+            If possible, interchange DPDMs between cabinets and see if fault follows. Replace DPDM if needed.
+          options:
+            - label: "Escalate"
+              next: KDP_ESC
+            - label: "Done"
+              next: KDP_DONE
+
+        KDP_DONE:
+          prompt: |
+            *Complete*
+            ✅ DPDM missing flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KDP_ESC:
+          prompt: |
+            *Escalate*
+            Provide: cabinet topology, Ethernet checks, DPDM swap result, photos of connectors/pins, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_rt_safety_error_in_this_pmc
+    platform: kempower
+    charger_type: dc
+    title: "Electrical Safety Fault Detected (Isolation / Moisture Risk)"
+    aliases: ["rt safety error", "isolation fault", "pmc safety error"]
+    triggers:
+      any_text_contains: ["RT_SAFETY_ERROR_IN_THIS_PMC", "rt_safety_error_in_this_pmc"]
+    severity: critical
+    tags: [safety, insulation, isolation, water_ingress, dpdm, maintenance]
+
+    description: >
+      Indication of isolation issue; charging cannot continue safely; may trigger self-check; often related to moisture/water ingress and maintenance. :contentReference[oaicite:13]{index=13}
+
+    decision_tree:
+      start_node: KISO0
+      nodes:
+        KISO0:
+          prompt: |
+            *RT_SAFETY_ERROR_IN_THIS_PMC — Start*
+            Treat as *safety critical*.
+            Is there any evidence of water ingress / moisture marks?
+          options:
+            - label: "Yes"
+              next: KISO1
+            - label: "No / unsure"
+              next: KISO2
+
+        KISO1:
+          prompt: |
+            *Moisture path*
+            Inspect cabinet for water ingress and module front panels for moisture marks/buildup.
+            Review maintenance history (filters/PM intervals) and adjust frequency if needed.
+          options:
+            - label: "Escalate"
+              next: KISO_ESC
+
+        KISO2:
+          prompt: |
+            *Still treat seriously*
+            Perform the same inspection steps and escalate with evidence—do not keep running repeated sessions.
+          options:
+            - label: "Escalate"
+              next: KISO_ESC
+
+        KISO_ESC:
+          prompt: |
+            *Escalate*
+            Provide: which PMC, photos of cabinet/modules, maintenance history notes, timestamps, any environmental factors.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_ssc_pmc_communication_error
+    platform: kempower
+    charger_type: dc
+    title: "Power Module Self-Check Failed (PMC Communication Error)"
+    aliases: ["ssc pmc communication error", "drive command failed"]
+    triggers:
+      any_text_contains: ["SSC_PMC_COMMUNICATION_ERROR", "ssc_pmc_communication_error"]
+    severity: high
+    tags: [self_check, pmc, comms, install]
+
+    description: >
+      Failed to send drive command to PMC during self-check; output reduced by 25kW. :contentReference[oaicite:14]{index=14}
+
+    decision_tree:
+      start_node: KSC0
+      nodes:
+        KSC0:
+          prompt: |
+            *SSC_PMC_COMMUNICATION_ERROR — Start*
+            Is SSC_PMC_FAN_CONTROL also present?
+          options:
+            - label: "Yes"
+              next: KSC1
+            - label: "No"
+              next: KSC2
+
+        KSC1:
+          prompt: |
+            *Prioritise fan control first*
+            Troubleshoot SSC_PMC_FAN_CONTROL first, then re-test this error.
+          options:
+            - label: "Back"
+              next: __MENU_KEMPOWER__
+
+        KSC2:
+          prompt: |
+            *Connection / seating*
+            Ensure PMC is correctly installed/seated. Restart and re-test.
+            If persists, replace affected Power Module.
+          options:
+            - label: "Resolved"
+              next: KSC_DONE
+            - label: "Escalate"
+              next: KSC_ESC
+
+        KSC_DONE:
+          prompt: |
+            *Complete*
+            ✅ Self-check comms flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KSC_ESC:
+          prompt: |
+            *Escalate*
+            Provide: module slot, seating check performed, any companion SSC codes, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_ssc_pmc_enable_line_error
+    platform: kempower
+    charger_type: dc
+    title: "Power Module Control Signal Fault – Enable Line or Control Signal Missing"
+    aliases: ["ssc pmc enable line error", "enable line fault"]
+    triggers:
+      any_text_contains: ["SSC_PMC_ENABLE_LINE_ERROR", "ssc_pmc_enable_line_error"]
+    severity: high
+    tags: [self_check, dpdm, enable_line, ct_lines, wiring]
+
+    description: >
+      PMC could not validate enable line during self-check; measure continuity EN line, check CT lines and connector pins; may require DPDM/PMC replacement. :contentReference[oaicite:15]{index=15}
+
+    decision_tree:
+      start_node: KEN0
+      nodes:
+        KEN0:
+          prompt: |
+            *SSC_PMC_ENABLE_LINE_ERROR — Start*
+            Has any cabling/config work been done recently (CT lines, DPDM, PMCs)?
+          options:
+            - label: "Yes"
+              next: KEN1
+            - label: "No / unsure"
+              next: KEN2
+
+        KEN1:
+          prompt: |
+            *Cabling crosscheck*
+            Do a cabling crosscheck; verify station config; confirm CT lines are correct.
+            Inspect module/DPDM seating and connector pins.
+          options:
+            - label: "Continue"
+              next: KEN2
+
+        KEN2:
+          prompt: |
+            *Electrical checks*
+            Measure continuity on enable line (EN) between PMC and DPDM.
+            If a defective PMC appears, move to another slot and see if fault follows.
+            If secondary cabinets exist, swap DPDMs to see if fault follows.
+          options:
+            - label: "Resolved"
+              next: KEN_DONE
+            - label: "Escalate / replace DPDM/PMC"
+              next: KEN_ESC
+
+        KEN_DONE:
+          prompt: |
+            *Complete*
+            ✅ Enable line flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KEN_ESC:
+          prompt: |
+            *Escalate*
+            Provide: continuity test result, CT wiring notes, photos of connector pins, what followed swap, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_ssc_pmc_voltage_missing
+    platform: kempower
+    charger_type: dc
+    title: "Power Module Not Producing Output – No DC Voltage Detected"
+    aliases: ["ssc pmc voltage missing", "pmc no voltage self-check"]
+    triggers:
+      any_text_contains: ["SSC_PMC_VOLTAGE_MISSING", "ssc_pmc_voltage_missing"]
+    severity: high
+    tags: [self_check, pmc, breaker, fuse, mains]
+
+    description: >
+      PMC cannot output voltage during self-check (V1/V2 variants); check breaker/fuse, missing phase, and swap module to confirm if fault follows. :contentReference[oaicite:16]{index=16} :contentReference[oaicite:17]{index=17}
+
+    decision_tree:
+      start_node: KVM0
+      nodes:
+        KVM0:
+          prompt: |
+            *SSC_PMC_VOLTAGE_MISSING — Start*
+            Is the Power Module breaker tripped / fuse suspected / missing phase suspected?
+          options:
+            - label: "Yes"
+              next: KVM1
+            - label: "No / unsure"
+              next: KVM2
+
+        KVM1:
+          prompt: |
+            *Supply & breaker path*
+            Confirm mains present / phases OK.
+            Check PMC breaker state (do not switch ON with cabinet power ON).
+            Restart and re-test.
+          options:
+            - label: "Continue"
+              next: KVM2
+
+        KVM2:
+          prompt: |
+            *Swap test*
+            Interchange the affected module with a known-good in the same cabinet and see if fault follows.
+            If it follows the module → replace it.
+          options:
+            - label: "Resolved"
+              next: KVM_DONE
+            - label: "Escalate"
+              next: KVM_ESC
+
+        KVM_DONE:
+          prompt: |
+            *Complete*
+            ✅ Voltage missing flow complete.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KVM_ESC:
+          prompt: |
+            *Escalate*
+            Provide: breaker state, phase measurements, swap result, any companion AFE/SSC codes, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  - id: kempower_ssc_selftest_internal_error
+    platform: kempower
+    charger_type: dc
+    title: "Internal System Fault – Self-Test Failed"
+    aliases: ["ssc selftest internal error", "self check failed", "all connectors failed"]
+    triggers:
+      any_text_contains: ["SSC_SELFTEST_INTERNAL_ERROR", "ssc_selftest_internal_error"]
+    severity: critical
+    tags: [self_check, configuration, canbus, software, dpdm]
+
+    description: >
+      System self-check failed; may be due to outdated software vs hardware, CAN wiring/divider board issues; troubleshoot companion SSC errors first. :contentReference[oaicite:18]{index=18}
+
+    decision_tree:
+      start_node: KST0
+      nodes:
+        KST0:
+          prompt: |
+            *SSC_SELFTEST_INTERNAL_ERROR — Start*
+            Are other SSC codes present (e.g., SSC_CONNECTOR_VOLTAGE_MISSING)?
+          options:
+            - label: "Yes"
+              next: KST1
+            - label: "No"
+              next: KST2
+
+        KST1:
+          prompt: |
+            *Do the other SSC codes first*
+            Troubleshoot companion SSC codes first, then re-run self-check.
+          options:
+            - label: "Back"
+              next: __MENU_KEMPOWER__
+
+        KST2:
+          prompt: |
+            *Core system checks*
+            Perform inventory scan to confirm PMCs found.
+            Verify DPDM configured correctly (if dynamic).
+            Update software to latest available version.
+            Inspect CAN bus divider board installation/wiring/damage.
+          options:
+            - label: "Escalate"
+              next: KST_ESC
+            - label: "Back"
+              next: __MENU_KEMPOWER__
+
+        KST_ESC:
+          prompt: |
+            *Escalate*
+            Provide: inventory scan results, software version, CAN divider inspection notes, other SSC codes, timestamps.
+          options:
+            - label: "Kempower menu"
+              next: __MENU_KEMPOWER__
