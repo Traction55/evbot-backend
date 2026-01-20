@@ -1126,7 +1126,7 @@ bot.on("message", async (msg) => {
 
   if (st.step === "site") {
     setReport(chatId, { data: { site: text } });
-    return
+    return askAssetId(chatId);
   }
 
   if (st.step === "assetId") {
