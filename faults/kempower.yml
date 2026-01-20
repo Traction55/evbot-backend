@@ -4,16 +4,72 @@
 
 faults:
 
-  - id: kempower_power_module_fault
+  # ============================================================
+  # MERGED: All "Power Module" related faults -> ONE decision tree
+  # Covers:
+  # - Generic Power Module / Power Stack fault
+  # - RT_PMC_UNAVAILABLE (PMC not communicating)
+  # - RT_RELAYCARD_MISSING (DPDM missing)
+  # - SSC_PMC_COMMUNICATION_ERROR (self-check comms / drive command failed)
+  # - SSC_PMC_ENABLE_LINE_ERROR (enable line / control signal missing)
+  # - SSC_PMC_VOLTAGE_MISSING (no DC voltage detected)
+  # ============================================================
+
+  - id: kempower_power_module_cluster
     platform: kempower
     charger_type: dc
     title: "Power Module / Power Stack Fault (PMC / DPDM)"
     severity: high
-    tags: [power, module, pmc, dpdm, rectifier, derate]
+    tags: [power, module, pmc, dpdm, rectifier, derate, self_check]
+
+    aliases:
+      - "Power Module / Power Stack Fault (PMC / DPDM)"
+      - "Power Module Controller Offline (PMC Not Communicating)"
+      - "Power Distribution Module Missing (DPDM Not Detected)"
+      - "Power Module Self-Check Failed (PMC Communication Error)"
+      - "Power Module Control Signal Fault – Enable Line or Control Signal Missing"
+      - "Power Module Not Producing Output – No DC Voltage Detected"
+      - "RT_PMC_UNAVAILABLE"
+      - "RT_RELAYCARD_MISSING"
+      - "SSC_PMC_COMMUNICATION_ERROR"
+      - "SSC_PMC_ENABLE_LINE_ERROR"
+      - "SSC_PMC_VOLTAGE_MISSING"
+      - "PMC offline"
+      - "DPDM missing"
+
+    triggers:
+      any_text_contains:
+        # Generic text
+        - "power module"
+        - "power stack"
+        - "pmc"
+        - "dpdm"
+        - "derate"
+        - "self-check"
+        - "self check"
+        - "enable line"
+        - "control signal"
+        - "no dc voltage"
+        - "voltage missing"
+        - "drive command failed"
+        - "not communicating"
+        - "offline"
+        - "relaycard"
+        # Error code strings (as your bot sees them)
+        - "RT_PMC_UNAVAILABLE"
+        - "rt_pmc_unavailable"
+        - "RT_RELAYCARD_MISSING"
+        - "rt_relaycard_missing"
+        - "SSC_PMC_COMMUNICATION_ERROR"
+        - "ssc_pmc_communication_error"
+        - "SSC_PMC_ENABLE_LINE_ERROR"
+        - "ssc_pmc_enable_line_error"
+        - "SSC_PMC_VOLTAGE_MISSING"
+        - "ssc_pmc_voltage_missing"
 
     description: >
-      One or more power modules or power stack controllers are offline or faulted.
-      This commonly results in derating or the charger becoming unavailable.
+      One or more Power Modules (PMC) or the Power Distribution Module (DPDM) is offline, missing, or failing
+      self-check. This commonly causes derating (reduced kW) or makes the charger unavailable.
 
     safety_notes:
       - Follow site LOTO and Kempower safety procedures before cabinet access
@@ -21,132 +77,277 @@ faults:
       - Do not re-energise if signs of damage or overheating are present
 
     decision_tree:
-      start_node: KPM0
+      start_node: PM0
       nodes:
 
-        KPM0:
+        PM0:
           prompt: |
-            *Power Module / Power Stack Fault — Start*
-            Is the charger derated (reduced output) or fully unavailable?
+            *Power Module / Power Stack Fault (PMC / DPDM)*
+            First—pick the symptom that matches the alarm:
           options:
-            - label: "Derated (reduced kW)"
-              next: KPM1
-            - label: "Unavailable / won’t start"
-              next: KPM1
+            - label: "🧩 PMC Offline / Not communicating (RT_PMC_UNAVAILABLE)"
+              next: PM_SYM_PMC_OFFLINE
+            - label: "📦 DPDM missing / not detected (RT_RELAYCARD_MISSING)"
+              next: PM_SYM_DPDM_MISSING
+            - label: "🧪 Self-check comms / drive command failed (SSC_PMC_COMMUNICATION_ERROR)"
+              next: PM_SYM_SELFCHK_COMMS
+            - label: "🔌 Enable line / control signal missing (SSC_PMC_ENABLE_LINE_ERROR)"
+              next: PM_SYM_ENABLE_LINE
+            - label: "❌ No DC voltage / not producing output (SSC_PMC_VOLTAGE_MISSING)"
+              next: PM_SYM_NO_DC_VOLT
+            - label: "⚠️ Generic power module / power stack fault"
+              next: PM_SYM_GENERIC
 
-        KPM1:
+        # ---------- Common safety gate ----------
+        PM_SAFETY:
           prompt: |
-            *Initial visual & electrical checks*
-            Perform safe external checks:
-            • Any breakers or fuses tripped?
-            • Any visible alarms on cabinets?
-            • Any obvious burning smell, discoloration, or damage?
+            ✅ *Safety first*
+            - LOTO / isolation applied per site procedure
+            - Allow discharge time before opening cabinet
+            - If smell/heat/smoke: stop and escalate
           options:
-            - label: "Breaker/fuse issue found"
-              next: KPM_FIX_BREAKER
-            - label: "Visible damage or burning"
-              next: KPM_ESC_DANGER
-            - label: "No obvious issues"
-              next: KPM2
+            - label: "Continue ➡️"
+              next: PM_VISUAL
 
-        KPM_FIX_BREAKER:
+        # ---------- Common visual + supply checks ----------
+        PM_VISUAL:
           prompt: |
-            *Breaker / supply recovery*
-            Reset tripped breakers/fuses once only (if permitted).
-            Monitor closely during restart.
+            👀 *Visual checks (cabinet + rack)*
+            - Any burnt smell / discoloration / melted insulation?
+            - Any loose lugs, arcing marks, water ingress?
+            - Any obvious connector damage / bent pins?
+          options:
+            - label: "🔥 Damage found"
+              next: PM_ESC_UNSAFE
+            - label: "Looks OK"
+              next: PM_SUPPLY
+
+        PM_SUPPLY:
+          prompt: |
+            ⚡ *Supply checks*
+            - Any upstream CB/fuse tripped?
+            - Confirm supply present (and stable if possible)
+            - If multi-feed: confirm correct feed live
+          options:
+            - label: "CB/fuse tripped or supply issue"
+              next: PM_SUPPLY_FIX
+            - label: "Supply OK"
+              next: PM_POWER_CYCLE
+
+        PM_SUPPLY_FIX:
+          prompt: |
+            *Supply / breaker recovery*
+            - Reset tripped breaker/fuse once only (if permitted)
+            - If it trips again: suspect fault—do not keep resetting
           options:
             - label: "Recovered"
-              next: KPM_DONE
+              next: PM_DONE
             - label: "Trips again / still faulting"
-              next: KPM_ESC
+              next: PM_ESC
 
-        KPM2:
+        PM_POWER_CYCLE:
           prompt: |
-            *Power cycle recovery*
-            Perform a controlled power cycle of the station per site procedure.
-            Allow full shutdown and restart.
+            🔁 *Controlled power cycle*
+            - Isolate OFF
+            - Wait per discharge procedure
+            - Power ON
+            - Re-check alarms / availability
           options:
-            - label: "Recovered after power cycle"
-              next: KPM_DONE
+            - label: "Recovered after power cycle ✅"
+              next: PM_DONE
             - label: "Still faulting"
-              next: KPM3
+              next: PM_IDENTIFY
 
-        KPM3:
+        PM_IDENTIFY:
           prompt: |
-            *Module / slot identification*
-            Can you identify a specific cabinet, slot, or module reporting a fault?
+            *Identify where the fault is*
+            Can you identify a specific cabinet / slot / module (PMC) related to the alarm?
           options:
             - label: "Yes — specific module/slot"
-              next: KPM4
+              next: PM_RESEAT
             - label: "No — unclear"
-              next: KPM5
+              next: PM_FW_CHECK
 
-        KPM4:
+        PM_RESEAT:
           prompt: |
-            *Module reseat / slot isolation (if authorised)*
+            *Reseat / connector inspection (authorised only)*
             If permitted:
-            • Apply LOTO
-            • Reseat the affected module
-            • Inspect connectors for burning, bent pins, contamination
+            - Apply LOTO
+            - Reseat affected module (PMC) / DPDM connectors
+            - Inspect connector pins for burning/bent pins/contamination
           options:
-            - label: "Damage found"
-              next: KPM_ESC_DANGER
+            - label: "🔥 Damage found"
+              next: PM_ESC_UNSAFE
             - label: "Reseated — re-test"
-              next: KPM_RETEST
+              next: PM_RETEST
             - label: "Not permitted"
-              next: KPM5
+              next: PM_FW_CHECK
 
-        KPM5:
-          prompt: |
-            *Firmware & configuration check*
-            Check:
-            • Station firmware version
-            • Recent updates or rollbacks
-            • DPDM/PMC detected correctly in configuration
-          options:
-            - label: "Firmware/config issue found"
-              next: KPM_ESC
-            - label: "No issues found"
-              next: KPM_ESC
-
-        KPM_RETEST:
+        PM_RETEST:
           prompt: |
             *Re-test*
-            Re-energise and run a short charging session.
-            Monitor output stability and fault recurrence.
+            Re-energise and run a short session (if safe).
+            Monitor output stability and recurrence.
           options:
-            - label: "Resolved"
-              next: KPM_DONE
+            - label: "Resolved ✅"
+              next: PM_DONE
             - label: "Still faulting"
-              next: KPM_ESC
+              next: PM_SWAP
 
-        KPM_ESC_DANGER:
+        PM_SWAP:
+          prompt: |
+            🧩 *Swap / change slots (if allowed)*
+            - Move suspected PMC to another slot
+            - Check if fault follows module or stays with slot/backplane
+          options:
+            - label: "Fault follows module"
+              next: PM_REPLACE_MODULE
+            - label: "Fault stays with slot/backplane"
+              next: PM_SLOT_BACKPLANE
+            - label: "Can’t swap / not allowed"
+              next: PM_FW_CHECK
+
+        PM_FW_CHECK:
+          prompt: |
+            *Firmware / configuration checks*
+            Check:
+            - Station firmware version
+            - Any recent updates/rollbacks
+            - Configuration detects PMCs/DPDM correctly
+          options:
+            - label: "Issue found (mismatch / config / update required)"
+              next: PM_ESC
+            - label: "No obvious issues"
+              next: PM_LOGS
+
+        PM_LOGS:
+          prompt: |
+            🗂️ *Logs & evidence*
+            - Note exact code/message + timestamps
+            - Capture HMI screenshots
+            - Capture any backend/session screenshots if available
+          options:
+            - label: "Escalate with evidence"
+              next: PM_ESC
+            - label: "Back to Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        # ---------- Symptom-specific “extras” (light branching) ----------
+        PM_SYM_PMC_OFFLINE:
+          prompt: |
+            *PMC Offline / Not communicating (RT_PMC_UNAVAILABLE)*
+            Common causes:
+            - seating / rear connector pins
+            - 24V/AUX supply issue
+            - module fault vs slot/backplane
+            Proceed through the standard isolate → visual → supply → cycle → reseat → swap path.
+          options:
+            - label: "Start checks ➡️"
+              next: PM_SAFETY
+
+        PM_SYM_DPDM_MISSING:
+          prompt: |
+            *DPDM missing / not detected (RT_RELAYCARD_MISSING)*
+            Common causes:
+            - comms loss between cabinets (dynamic systems)
+            - Ethernet wiring/switch ports
+            - connector pin damage
+            You’ll do standard checks, plus comms between cabinets.
+          options:
+            - label: "Start checks ➡️"
+              next: PM_SAFETY
+
+        PM_SYM_SELFCHK_COMMS:
+          prompt: |
+            *Self-check comms / drive command failed (SSC_PMC_COMMUNICATION_ERROR)*
+            If SSC fan control errors exist, address those first.
+            Otherwise, treat as seating/comms/module fault and proceed.
+          options:
+            - label: "Start checks ➡️"
+              next: PM_SAFETY
+
+        PM_SYM_ENABLE_LINE:
+          prompt: |
+            *Enable line / control signal missing (SSC_PMC_ENABLE_LINE_ERROR)*
+            Often related to:
+            - EN line continuity between PMC and DPDM
+            - CT lines / wiring after recent work
+            - connector pins
+            Proceed with standard checks, then escalate with continuity results.
+          options:
+            - label: "Start checks ➡️"
+              next: PM_SAFETY
+
+        PM_SYM_NO_DC_VOLT:
+          prompt: |
+            *No DC voltage detected (SSC_PMC_VOLTAGE_MISSING)*
+            Common causes:
+            - breaker/fuse/phase issue
+            - module fault
+            Proceed with standard checks (supply → cycle → reseat → swap).
+          options:
+            - label: "Start checks ➡️"
+              next: PM_SAFETY
+
+        PM_SYM_GENERIC:
+          prompt: |
+            *Generic Power Module / Power Stack Fault*
+            Proceed through the standard isolate → visual → supply → cycle → reseat → swap path.
+          options:
+            - label: "Start checks ➡️"
+              next: PM_SAFETY
+
+        # ---------- Outcomes ----------
+        PM_REPLACE_MODULE:
+          prompt: |
+            ✅ *Fault follows module*
+            Likely module failure.
+            - Replace module per OEM procedure
+            - Record serial + slot
+            - Retest after replacement
+          options:
+            - label: "Back to Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        PM_SLOT_BACKPLANE:
+          prompt: |
+            🧩 *Fault stays with slot/backplane*
+            Likely slot/backplane/harness/controller-side issue.
+            - Inspect slot connector pins + harness seating
+            - Escalate with photos + logs
+          options:
+            - label: "Escalate"
+              next: PM_ESC
+            - label: "Back to menu"
+              next: __MENU_KEMPOWER__
+
+        PM_ESC_UNSAFE:
           prompt: |
             *⚠️ Escalate immediately — unsafe condition*
             Do NOT re-energise.
             Evidence required:
-            • Photos of damage/burn marks
-            • Affected cabinet/module
-            • Error codes and timestamps
+            - Photos of damage/burn marks
+            - Affected cabinet/module/slot
+            - Error codes and timestamps
           options:
             - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
-        KPM_ESC:
+        PM_ESC:
           prompt: |
             *Escalate — Power Module / Stack Fault*
             Include:
-            • Exact error codes/messages
-            • Affected cabinet/module/slot
-            • Derate level (kW)
-            • Actions already attempted
-            • Firmware version
-            • Photos/screenshots
+            - Exact error codes/messages + timestamps
+            - Affected cabinet/module/slot
+            - Derate level (kW) / behaviour
+            - Actions attempted (cycle / reseat / swap)
+            - Firmware version
+            - Photos/screenshots
           options:
             - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
-        KPM_DONE:
+        PM_DONE:
           prompt: |
             *Complete*
             ✅ Power module troubleshooting complete.
@@ -154,6 +355,10 @@ faults:
             - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
+
+  # ============================================================
+  # Other top faults (unchanged from your current file)
+  # ============================================================
 
   - id: kempower_no_heartbeat
     platform: kempower
@@ -167,7 +372,7 @@ faults:
     tags: [network, ethernet, satellite, control_unit, offline]
 
     description: >
-      Satellite/Control Unit is configured but not available on the local network. :contentReference[oaicite:0]{index=0}
+      Satellite/Control Unit is configured but not available on the local network.
 
     decision_tree:
       start_node: KHB0
@@ -192,7 +397,6 @@ faults:
               next: KHB3
             - label: "Still offline"
               next: KHB_ESC
-          # From Kempower steps: measure 23–25VDC, check RJ45 cabling + extension block :contentReference[oaicite:1]{index=1}
 
         KHB2:
           prompt: |
@@ -204,7 +408,6 @@ faults:
               next: KHB3
             - label: "Still offline"
               next: KHB_ESC
-          # From Kempower steps: multi-cabinet checks, GND jumper, main↔secondary links :contentReference[oaicite:2]{index=2}
 
         KHB3:
           prompt: |
@@ -235,7 +438,7 @@ faults:
     tags: [ccs, control_pilot, connector, startup]
 
     description: >
-      CCS not available; Control Pilot (CP) in fault state during startup. :contentReference[oaicite:3]{index=3}
+      CCS not available; Control Pilot (CP) in fault state during startup.
 
     decision_tree:
       start_node: KCP0
@@ -260,7 +463,6 @@ faults:
               next: KCP_DONE
             - label: "Still failing"
               next: KCP_ESC
-          # From doc: restart, connect CP pin correctly, replace CCS card revision :contentReference[oaicite:4]{index=4}
 
         KCP2:
           prompt: |
@@ -301,7 +503,7 @@ faults:
     tags: [safety, rcd, rcm, earth_leakage, type2]
 
     description: >
-      Residual current monitor detected a leak to protective earth (PE); connector disabled for safety. :contentReference[oaicite:5]{index=5}
+      Residual current monitor detected a leak to protective earth (PE); connector disabled for safety.
 
     decision_tree:
       start_node: KRCM0
@@ -337,7 +539,6 @@ faults:
               next: KRCM_ESC
             - label: "Done"
               next: KRCM_DONE
-          # From doc: insulation resistance check, replace RCM if measurements OK :contentReference[oaicite:6]{index=6}
 
         KRCM_DONE:
           prompt: |
@@ -367,7 +568,7 @@ faults:
     tags: [pmc, afe, firmware, comms]
 
     description: >
-      PMC internal communication bus error; PMC temporarily unavailable; reduced power in cabinet. :contentReference[oaicite:7]{index=7}
+      PMC internal communication bus error; PMC temporarily unavailable; reduced power in cabinet.
 
     decision_tree:
       start_node: KAFE0
@@ -420,7 +621,7 @@ faults:
     tags: [fan, cooling, airflow, firmware, pmc]
 
     description: >
-      Fan current out of range; output reduced and thermal performance reduced. :contentReference[oaicite:8]{index=8}
+      Fan current out of range; output reduced and thermal performance reduced.
 
     decision_tree:
       start_node: KFN0
@@ -485,7 +686,7 @@ faults:
     tags: [grid, supply, undervoltage, wiring, pmc]
 
     description: >
-      Primary circuit voltage too low; reduced power available; can relate to supply insufficiency or wiring/module issues. :contentReference[oaicite:9]{index=9}
+      Primary circuit voltage too low; reduced power available; can relate to supply insufficiency or wiring/module issues.
 
     decision_tree:
       start_node: KUV0
@@ -518,7 +719,6 @@ faults:
               next: KUV_DONE
             - label: "Still failing"
               next: KUV_ESC
-          # From doc: breaker, connector pins, swap slot, replace if follows :contentReference[oaicite:10]{index=10}
 
         KUV_DONE:
           prompt: |
@@ -537,135 +737,6 @@ faults:
               next: __MENU_KEMPOWER__
 
 
-  - id: kempower_rt_pmc_unavailable
-    platform: kempower
-    charger_type: dc
-    title: "Power Module Controller Offline (PMC Not Communicating)"
-    aliases: ["rt pmc unavailable", "pmc not communicating"]
-    triggers:
-      any_text_contains: ["RT_PMC_UNAVAILABLE", "rt_pmc_unavailable"]
-    severity: high
-    tags: [pmc, canbus, 24v, fuse, config, comms]
-
-    description: >
-      Power Module is in configuration but not communicating; output reduced by 25kW. :contentReference[oaicite:11]{index=11}
-
-    decision_tree:
-      start_node: KPU0
-      nodes:
-        KPU0:
-          prompt: |
-            *Power Module Controller Offline*
-            After restart, is the PMC still missing/unavailable?
-          options:
-            - label: "Yes"
-              next: KPU1
-            - label: "No"
-              next: KPU_DONE
-
-        KPU1:
-          prompt: |
-            *Local checks*
-            Confirm module install matches configuration, check status LEDs for 24V supply, reset AUX fuse if tripped.
-            Inspect connector pins for damage; check airflow/filters.
-          options:
-            - label: "Resolved"
-              next: KPU_DONE
-            - label: "Still failing"
-              next: KPU2
-
-        KPU2:
-          prompt: |
-            *Hardware path*
-            Update software to latest; consider bus divider in control module; replace PMC if required.
-          options:
-            - label: "Escalate"
-              next: KPU_ESC
-            - label: "Back"
-              next: __MENU_KEMPOWER__
-
-        KPU_DONE:
-          prompt: |
-            *Complete*
-            ✅ PMC unavailable flow complete.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-        KPU_ESC:
-          prompt: |
-            *Escalate*
-            Provide: PMC slot, 24V/LED status, AUX fuse status, photos of rear connector pins, timestamps.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
-  - id: kempower_rt_relaycard_missing
-    platform: kempower
-    charger_type: dc
-    title: "Power Distribution Module Missing (DPDM Not Detected)"
-    aliases: ["rt relaycard missing", "dpdm missing"]
-    triggers:
-      any_text_contains: ["RT_RELAYCARD_MISSING", "rt_relaycard_missing"]
-    severity: high
-    tags: [dpdm, dynamic, ethernet, cabinet, comms]
-
-    description: >
-      Unit configured as dynamic but no DPDM found; comms loss between cabinets; damaged pins/connectors or defective DPDM. :contentReference[oaicite:12]{index=12}
-
-    decision_tree:
-      start_node: KDP0
-      nodes:
-        KDP0:
-          prompt: |
-            *RT_RELAYCARD_MISSING — Start*
-            Is this a multi-cabinet / dynamic system with secondary cabinets present?
-          options:
-            - label: "Yes"
-              next: KDP1
-            - label: "Not sure"
-              next: KDP1
-
-        KDP1:
-          prompt: |
-            *Comms & connectors*
-            Check Ethernet wiring between cabinets and try a different port on cabinet switch.
-            Inspect DPDM connector pins + cabinet connectors (no bent/broken pins).
-          options:
-            - label: "Resolved"
-              next: KDP_DONE
-            - label: "Still failing"
-              next: KDP2
-
-        KDP2:
-          prompt: |
-            *DPDM isolate / swap*
-            If secondary cabinets exist, you may run reduced capacity by removing PMCs from affected cabinet in config.
-            If possible, interchange DPDMs between cabinets and see if fault follows. Replace DPDM if needed.
-          options:
-            - label: "Escalate"
-              next: KDP_ESC
-            - label: "Done"
-              next: KDP_DONE
-
-        KDP_DONE:
-          prompt: |
-            *Complete*
-            ✅ DPDM missing flow complete.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-        KDP_ESC:
-          prompt: |
-            *Escalate*
-            Provide: cabinet topology, Ethernet checks, DPDM swap result, photos of connectors/pins, timestamps.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
   - id: kempower_rt_safety_error_in_this_pmc
     platform: kempower
     charger_type: dc
@@ -677,7 +748,7 @@ faults:
     tags: [safety, insulation, isolation, water_ingress, dpdm, maintenance]
 
     description: >
-      Indication of isolation issue; charging cannot continue safely; may trigger self-check; often related to moisture/water ingress and maintenance. :contentReference[oaicite:13]{index=13}
+      Indication of isolation issue; charging cannot continue safely; may trigger self-check; often related to moisture/water ingress and maintenance.
 
     decision_tree:
       start_node: KISO0
@@ -719,196 +790,6 @@ faults:
               next: __MENU_KEMPOWER__
 
 
-  - id: kempower_ssc_pmc_communication_error
-    platform: kempower
-    charger_type: dc
-    title: "Power Module Self-Check Failed (PMC Communication Error)"
-    aliases: ["ssc pmc communication error", "drive command failed"]
-    triggers:
-      any_text_contains: ["SSC_PMC_COMMUNICATION_ERROR", "ssc_pmc_communication_error"]
-    severity: high
-    tags: [self_check, pmc, comms, install]
-
-    description: >
-      Failed to send drive command to PMC during self-check; output reduced by 25kW. :contentReference[oaicite:14]{index=14}
-
-    decision_tree:
-      start_node: KSC0
-      nodes:
-        KSC0:
-          prompt: |
-            *SSC_PMC_COMMUNICATION_ERROR — Start*
-            Is SSC_PMC_FAN_CONTROL also present?
-          options:
-            - label: "Yes"
-              next: KSC1
-            - label: "No"
-              next: KSC2
-
-        KSC1:
-          prompt: |
-            *Prioritise fan control first*
-            Troubleshoot SSC_PMC_FAN_CONTROL first, then re-test this error.
-          options:
-            - label: "Back"
-              next: __MENU_KEMPOWER__
-
-        KSC2:
-          prompt: |
-            *Connection / seating*
-            Ensure PMC is correctly installed/seated. Restart and re-test.
-            If persists, replace affected Power Module.
-          options:
-            - label: "Resolved"
-              next: KSC_DONE
-            - label: "Escalate"
-              next: KSC_ESC
-
-        KSC_DONE:
-          prompt: |
-            *Complete*
-            ✅ Self-check comms flow complete.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-        KSC_ESC:
-          prompt: |
-            *Escalate*
-            Provide: module slot, seating check performed, any companion SSC codes, timestamps.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
-  - id: kempower_ssc_pmc_enable_line_error
-    platform: kempower
-    charger_type: dc
-    title: "Power Module Control Signal Fault – Enable Line or Control Signal Missing"
-    aliases: ["ssc pmc enable line error", "enable line fault"]
-    triggers:
-      any_text_contains: ["SSC_PMC_ENABLE_LINE_ERROR", "ssc_pmc_enable_line_error"]
-    severity: high
-    tags: [self_check, dpdm, enable_line, ct_lines, wiring]
-
-    description: >
-      PMC could not validate enable line during self-check; measure continuity EN line, check CT lines and connector pins; may require DPDM/PMC replacement. :contentReference[oaicite:15]{index=15}
-
-    decision_tree:
-      start_node: KEN0
-      nodes:
-        KEN0:
-          prompt: |
-            *SSC_PMC_ENABLE_LINE_ERROR — Start*
-            Has any cabling/config work been done recently (CT lines, DPDM, PMCs)?
-          options:
-            - label: "Yes"
-              next: KEN1
-            - label: "No / unsure"
-              next: KEN2
-
-        KEN1:
-          prompt: |
-            *Cabling crosscheck*
-            Do a cabling crosscheck; verify station config; confirm CT lines are correct.
-            Inspect module/DPDM seating and connector pins.
-          options:
-            - label: "Continue"
-              next: KEN2
-
-        KEN2:
-          prompt: |
-            *Electrical checks*
-            Measure continuity on enable line (EN) between PMC and DPDM.
-            If a defective PMC appears, move to another slot and see if fault follows.
-            If secondary cabinets exist, swap DPDMs to see if fault follows.
-          options:
-            - label: "Resolved"
-              next: KEN_DONE
-            - label: "Escalate / replace DPDM/PMC"
-              next: KEN_ESC
-
-        KEN_DONE:
-          prompt: |
-            *Complete*
-            ✅ Enable line flow complete.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-        KEN_ESC:
-          prompt: |
-            *Escalate*
-            Provide: continuity test result, CT wiring notes, photos of connector pins, what followed swap, timestamps.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
-  - id: kempower_ssc_pmc_voltage_missing
-    platform: kempower
-    charger_type: dc
-    title: "Power Module Not Producing Output – No DC Voltage Detected"
-    aliases: ["ssc pmc voltage missing", "pmc no voltage self-check"]
-    triggers:
-      any_text_contains: ["SSC_PMC_VOLTAGE_MISSING", "ssc_pmc_voltage_missing"]
-    severity: high
-    tags: [self_check, pmc, breaker, fuse, mains]
-
-    description: >
-      PMC cannot output voltage during self-check (V1/V2 variants); check breaker/fuse, missing phase, and swap module to confirm if fault follows. :contentReference[oaicite:16]{index=16} :contentReference[oaicite:17]{index=17}
-
-    decision_tree:
-      start_node: KVM0
-      nodes:
-        KVM0:
-          prompt: |
-            *SSC_PMC_VOLTAGE_MISSING — Start*
-            Is the Power Module breaker tripped / fuse suspected / missing phase suspected?
-          options:
-            - label: "Yes"
-              next: KVM1
-            - label: "No / unsure"
-              next: KVM2
-
-        KVM1:
-          prompt: |
-            *Supply & breaker path*
-            Confirm mains present / phases OK.
-            Check PMC breaker state (do not switch ON with cabinet power ON).
-            Restart and re-test.
-          options:
-            - label: "Continue"
-              next: KVM2
-
-        KVM2:
-          prompt: |
-            *Swap test*
-            Interchange the affected module with a known-good in the same cabinet and see if fault follows.
-            If it follows the module → replace it.
-          options:
-            - label: "Resolved"
-              next: KVM_DONE
-            - label: "Escalate"
-              next: KVM_ESC
-
-        KVM_DONE:
-          prompt: |
-            *Complete*
-            ✅ Voltage missing flow complete.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-        KVM_ESC:
-          prompt: |
-            *Escalate*
-            Provide: breaker state, phase measurements, swap result, any companion AFE/SSC codes, timestamps.
-          options:
-            - label: "Kempower menu"
-              next: __MENU_KEMPOWER__
-
-
   - id: kempower_ssc_selftest_internal_error
     platform: kempower
     charger_type: dc
@@ -920,7 +801,7 @@ faults:
     tags: [self_check, configuration, canbus, software, dpdm]
 
     description: >
-      System self-check failed; may be due to outdated software vs hardware, CAN wiring/divider board issues; troubleshoot companion SSC errors first. :contentReference[oaicite:18]{index=18}
+      System self-check failed; may be due to outdated software vs hardware, CAN wiring/divider board issues; troubleshoot companion SSC errors first.
 
     decision_tree:
       start_node: KST0
