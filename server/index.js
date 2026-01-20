@@ -312,7 +312,7 @@ async function upsertPhotoOrText(chatId, opts) {
  * ===========================
  * These drive the /report checkbox list shown in Telegram.
  * - Base checklist is manufacturer-specific
- * - Addons are fault-specific (based on faultId)
+ * - Addons are fault-specific (based on faultID)
  */
 
 const REPORT_CHECKLIST = {
@@ -360,15 +360,45 @@ const REPORT_FAULT_ADDONS = {
   ],
 };
 
-function uniqueStrings(arr) {
+// ---------- SMART DEDUPE (FIX OVERLAPPING AUTEL ITEMS) ----------
+function stripEmojiAndNormalize(s) {
+  return String(s || "")
+    .replace(/[\u{1F000}-\u{1FAFF}]/gu, "")
+    .replace(/[\u{2600}-\u{26FF}]/gu, "")
+    .replace(/[\u{2700}-\u{27BF}]/gu, "")
+    .replace(/\uFE0F/gu, "")
+    .replace(/\u200D/gu, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+// Map different wordings to the same "meaning bucket"
+function actionSignature(label) {
+  const t = stripEmojiAndNormalize(label);
+
+  // buckets for common overlaps
+  if (/(loto|isolation|lock\s*out|tag\s*out)/i.test(t)) return "loto";
+  if (/(visual|inspection|burn|water ingress|loose lug|heat mark)/i.test(t)) return "visual";
+  if (/(input power|3φ|3 phase|three phase|voltage|rotation|phase sequence|supply)/i.test(t))
+    return "input_power";
+  if (/(power cycle|reboot|restart)/i.test(t)) return "power_cycle";
+  if (/(firmware|version|update)/i.test(t)) return "firmware";
+  if (/(logs|alarms|timestamps|event log)/i.test(t)) return "logs";
+
+  // default: normalized string
+  return t;
+}
+
+function dedupeActionLabelsSmart(labels) {
   const out = [];
   const seen = new Set();
-  for (const v of arr) {
-    const s = String(v || "").trim();
+  for (const raw of labels || []) {
+    const s = String(raw || "").trim();
     if (!s) continue;
-    const key = s.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
+    const sig = actionSignature(s);
+    if (seen.has(sig)) continue;
+    seen.add(sig);
     out.push(s);
   }
   return out;
@@ -391,15 +421,17 @@ function getFaultAddonLabels(faultId) {
  * Priority order:
  * 1) Manufacturer base checklist
  * 2) Fault addons (by faultId)
- * 3) YAML report_template.actions (appended, deduped)
- * 4) If all empty -> fallback REPORT_ACTION_OPTIONS
+ * 3) YAML report_template.actions (appended)
+ * 4) Smart-dedupe overlaps (by "meaning bucket")
+ * 5) If all empty -> fallback REPORT_ACTION_OPTIONS
  */
 function buildReportActionOptions({ manufacturer, faultId, yamlActions }) {
   const mfBase = getManufacturerChecklistLabels(manufacturer);
   const faultAdd = getFaultAddonLabels(faultId);
   const y = Array.isArray(yamlActions) ? yamlActions : [];
-  const merged = uniqueStrings([...mfBase, ...faultAdd, ...y]);
-  return merged;
+
+  // combine, then smart-dedupe (fix overlaps like "input power verified" vs "3-phase supply present")
+  return dedupeActionLabelsSmart([...mfBase, ...faultAdd, ...y]);
 }
 
 // ------------------- STATE -------------------
@@ -697,6 +729,7 @@ function setReport(chatId, patch) {
         prefilled: false,
 
         // Report fields
+        site: "",
         assetId: "",
         technician: "",
         clientRef: "",
@@ -704,6 +737,7 @@ function setReport(chatId, patch) {
         // Optional photos + notes
         photos: [],
         notes: "",
+        resolution: "",
       },
     };
 
@@ -721,20 +755,33 @@ function clearReport(chatId) {
   reportState.delete(chatId);
 }
 
-function formatReportHtml(data) {
-  const site = escapeHtml(data.site || "");
-  const assetId = escapeHtml(data.assetId || "");
-  const technician = escapeHtml(data.technician || "");
-  const clientRef = escapeHtml(data.clientRef || "");
+// Emojis in builder ✅, but strip them in final report ✅
+function stripEmojisForFinal(s = "") {
+  return String(s)
+    .replace(/[\u{1F000}-\u{1FAFF}]/gu, "")
+    .replace(/[\u{2600}-\u{26FF}]/gu, "")
+    .replace(/[\u{2700}-\u{27BF}]/gu, "")
+    .replace(/\uFE0F/gu, "")
+    .replace(/\u200D/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
 
-  const manufacturer = escapeHtml((data.manufacturer || "").toUpperCase());
-  const faultTitle = escapeHtml(data.faultTitle || "");
-  const faultSummary = escapeHtml(data.faultSummary || "");
-  const resolution = escapeHtml(data.resolution || "");
-  const notes = escapeHtml(data.notes || "");
+function formatReportHtml(data) {
+  const site = escapeHtml(stripEmojisForFinal(data.site || ""));
+  const assetId = escapeHtml(stripEmojisForFinal(data.assetId || ""));
+  const technician = escapeHtml(stripEmojisForFinal(data.technician || ""));
+  const clientRef = escapeHtml(stripEmojisForFinal(data.clientRef || ""));
+
+  const manufacturer = escapeHtml(stripEmojisForFinal((data.manufacturer || "").toUpperCase()));
+  const faultTitle = escapeHtml(stripEmojisForFinal(data.faultTitle || ""));
+  const faultSummary = escapeHtml(stripEmojisForFinal(data.faultSummary || ""));
+  const resolution = escapeHtml(stripEmojisForFinal(data.resolution || ""));
+  const notes = escapeHtml(stripEmojisForFinal(data.notes || ""));
 
   const actions = Array.isArray(data.actions) ? data.actions : [];
-  const actionsLines = actions.length ? actions.map((a) => `• ${escapeHtml(a)}`).join("\n") : "• (none recorded)";
+  const cleanActions = actions.map((a) => stripEmojisForFinal(a)).filter(Boolean);
+  const actionsLines = cleanActions.length ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n") : "• (none recorded)";
 
   const photos = Array.isArray(data.photos) ? data.photos : [];
   const attachmentsLine = photos.length ? `• Photos uploaded (${photos.length})` : "• None";
@@ -767,11 +814,13 @@ async function startReport(chatId) {
       faultTitle: "",
       faultSummary: "",
       prefilled: false,
+      site: "",
       assetId: "",
       technician: "",
       clientRef: "",
       photos: [],
       notes: "",
+      resolution: "",
     },
   });
 
@@ -800,11 +849,13 @@ async function startReportFromFault(chatId, pack, fault) {
       faultTitle: fault?.title || "",
       faultSummary: String(t.summary || "").trim(),
       prefilled: true,
+      site: "",
       assetId: "",
       technician: "",
       clientRef: "",
       photos: [],
       notes: "",
+      resolution: "",
     },
   });
 
@@ -946,6 +997,7 @@ async function askResolution(chatId) {
   });
 }
 
+
 async function askUploadPhotos(chatId) {
   setReport(chatId, { step: "UPLOAD_PHOTOS" });
 
@@ -1026,7 +1078,7 @@ function buildPackMenuKeyboard(pack) {
   if (!faults.length) {
     rows.push([{ text: `⚠️ No ${cap(pack)} faults loaded (check /debug/${pack})`, callback_data: "noop" }]);
   } else {
-    // ✅ FIX: callback_data must include the RIGHT PACK
+    // ✅ callback_data includes the RIGHT PACK
     const prefix = pack.toUpperCase(); // AUTEL / KEMPOWER / TRITIUM
     faults.forEach((f) => rows.push([{ text: f.title, callback_data: `${prefix}:${f.id}` }]));
   }
@@ -1119,6 +1171,7 @@ bot.on("message", async (msg) => {
   // If it's a photo message, photo handler below will deal with it
   if (!text) return;
 
+  // ignore commands
   if (text.startsWith("/")) return;
 
   const st = reportState.get(chatId);
@@ -1286,7 +1339,6 @@ bot.on("callback_query", async (q) => {
   if (data.startsWith("r:mfr:")) {
     const mfr = data.split(":")[2]; // autel | kempower | tritium
 
-    // Build base checklist immediately when manufacturer is chosen (even before fault)
     const actionOptionsBuilt = buildReportActionOptions({
       manufacturer: mfr,
       faultId: "",
@@ -1358,9 +1410,13 @@ bot.on("callback_query", async (q) => {
 
     setReport(chatId, { data: { actions: Array.from(selected) } });
 
+    // include context header
+    const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
+    const mfr = st?.data?.manufacturer ? `\n<b>Manufacturer:</b> ${escapeHtml(cap(st.data.manufacturer))}` : "";
+
     return upsertMessage(chatId, {
       messageId,
-      text: "Select <b>actions performed</b>:",
+      text: `Select <b>actions performed</b>:${mfr}${title}`,
       parse_mode: "HTML",
       reply_markup: { inline_keyboard: buildActionsKeyboard(actionOptions, Array.from(selected)) },
     });
