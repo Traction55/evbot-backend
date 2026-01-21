@@ -728,11 +728,14 @@ function setReport(chatId, patch) {
 
         prefilled: false,
 
-        // Report fields
         site: "",
-        assetId: "",
+        chargerIdPublic: "",          // public / billing services number
+        chargerSerialNumber: "",      // OEM S/N (required for manufacturer partner)
+        assetId: "",   // internal asset id (optional)
         technician: "",
         clientRef: "",
+
+
 
         // Optional photos + notes
         photos: [],
@@ -786,20 +789,23 @@ function formatReportHtml(data) {
   const photos = Array.isArray(data.photos) ? data.photos : [];
   const attachmentsLine = photos.length ? `• Photos uploaded (${photos.length})` : "• None";
 
-  return (
-    `🧾 <b>EVBot Service Report</b>\n\n` +
-    `<b>Site:</b> ${site}\n` +
-    `<b>Asset ID:</b> ${assetId}\n` +
-    `<b>Technician:</b> ${technician}\n` +
-    `<b>Client reference / ticket #:</b> ${clientRef}\n` +
-    (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
-    `<b>Fault:</b> ${faultTitle}\n` +
-    (faultSummary ? `<b>Fault summary:</b> ${faultSummary}\n` : "") +
-    `\n<b>Actions Taken:</b>\n${actionsLines}\n\n` +
-    `<b>Status / Outcome:</b> ${resolution}\n\n` +
-    `<b>Attachments:</b>\n${attachmentsLine}\n` +
-    (notes ? `\n<b>Notes:</b>\n${notes}\n` : "")
-  );
+return (
+  `🧾 <b>EVBot Service Report</b>\n\n` +
+  `<b>Site:</b> ${site}\n` +
+  `<b>Charger ID (public / billing):</b> ${chargerIdPublic || ""}\n` +
+  `<b>Charger Serial Number (S/N):</b> ${chargerSerialNumber || ""}\n` +
+  (assetId ? `<b>Asset ID (internal):</b> ${assetId}\n` : "") +
+  `<b>Technician:</b> ${technician}\n` +
+  `<b>Client reference / ticket #:</b> ${clientRef}\n` +
+  (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
+  `<b>Fault:</b> ${faultTitle}\n` +
+  (faultSummary ? `<b>Fault summary:</b> ${faultSummary}\n` : "") +
+  `\n<b>Actions Taken:</b>\n${actionsLines}\n\n` +
+  `<b>Status / Outcome:</b> ${resolution}\n` +
+  `<b>Attachments:</b>\n${attachmentsLine}\n` +
+  (notes ? `\n<b>Notes:</b>\n${notes}\n` : "")
+);
+
 }
 
 async function startReport(chatId) {
