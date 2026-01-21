@@ -11,12 +11,18 @@
  * - "Create report for this fault" from any fault card (autofills manufacturer + fault)
  * - Removed visible "evidence captured" checklist (per request)
  * - Added optional "Upload photos" step (silent capture, referenced as attachments count)
- * - Report fields: Site name, Asset ID, Tech name, Client reference / ticket #
+ * - Report fields:
+ *     • Site name
+ *     • Charger ID (public/billing)
+ *     • Charger Serial Number (S/N)
+ *     • Asset ID (internal)
+ *     • Tech name
+ *     • Client reference / ticket #
  *
  * New additions (Images):
  * - Serves static images from /images -> assets/images
  * - YAML decision_tree node can include: image: autel/ac_contactor_location
- *   and bot will sendPhoto(PUBLIC_URL/images/autel/ac_contactor_location.jpg)
+ *   and bot will sendPhoto(PUBLIC_URL/images/autel/ac_contactor_location.png)
  *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
@@ -35,7 +41,33 @@ const path = require("path");
 const yaml = require("js-yaml");
 const TelegramBot = require("node-telegram-bot-api");
 
-// ------------------- ENV -------------------
+/* =========================
+   HTML SAFETY (Telegram)
+   ========================= */
+function escapeHtml(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+// Emojis in builder ✅, but strip them in final report ✅
+function stripEmojisForFinal(s = "") {
+  return String(s)
+    .replace(/[\u{1F000}-\u{1FAFF}]/gu, "")
+    .replace(/[\u{2600}-\u{26FF}]/gu, "")
+    .replace(/[\u{2700}-\u{27BF}]/gu, "")
+    .replace(/\uFE0F/gu, "")
+    .replace(/\u200D/gu, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/* =========================
+   ENV
+   ========================= */
 const PORT = Number(process.env.PORT) || 3000;
 const BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
@@ -69,7 +101,9 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
-// ------------------- YAML LOADING (ROBUST) -------------------
+/* =========================
+   YAML LOADING (ROBUST)
+   ========================= */
 const FAULTS_DIR = path.join(__dirname, "..", "faults");
 const AUTEL_FILE = path.join(FAULTS_DIR, "autel.yml");
 const KEMPOWER_FILE = path.join(FAULTS_DIR, "kempower.yml");
@@ -142,7 +176,9 @@ try {
   console.log(`✅ Tritium faults loaded: ${bootTri.faults.length}`);
 } catch (_) {}
 
-// ------------------- EXPRESS -------------------
+/* =========================
+   EXPRESS
+   ========================= */
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -223,7 +259,9 @@ app.get("/debug/images", (req, res) => {
   });
 });
 
-// ------------------- TELEGRAM BOT (ONE instance) -------------------
+/* =========================
+   TELEGRAM BOT (ONE instance)
+   ========================= */
 const bot = new TelegramBot(
   BOT_TOKEN,
   useWebhook
@@ -239,11 +277,9 @@ const bot = new TelegramBot(
 bot.on("polling_error", (e) => console.error("❌ polling_error:", e?.message || e));
 bot.on("webhook_error", (e) => console.error("❌ webhook_error:", e?.message || e));
 
-// ------------------- HELPERS -------------------
-function escapeHtml(str) {
-  return String(str).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-}
-
+/* =========================
+   HELPERS
+   ========================= */
 function kb(rows) {
   return { inline_keyboard: rows };
 }
@@ -306,15 +342,9 @@ async function upsertPhotoOrText(chatId, opts) {
   return upsertMessage(chatId, { chatId, messageId, text, parse_mode, reply_markup });
 }
 
-/**
- * ===========================
- * REPORT CHECKLIST (MFR + FAULT AWARE)
- * ===========================
- * These drive the /report checkbox list shown in Telegram.
- * - Base checklist is manufacturer-specific
- * - Addons are fault-specific (based on faultID)
- */
-
+/* =========================
+   REPORT CHECKLIST (MFR + FAULT AWARE)
+   ========================= */
 const REPORT_CHECKLIST = {
   kempower: {
     base: [
@@ -360,7 +390,7 @@ const REPORT_FAULT_ADDONS = {
   ],
 };
 
-// ---------- SMART DEDUPE (FIX OVERLAPPING AUTEL ITEMS) ----------
+// ---------- SMART DEDUPE (FIX OVERLAPPING ITEMS) ----------
 function stripEmojiAndNormalize(s) {
   return String(s || "")
     .replace(/[\u{1F000}-\u{1FAFF}]/gu, "")
@@ -377,7 +407,6 @@ function stripEmojiAndNormalize(s) {
 function actionSignature(label) {
   const t = stripEmojiAndNormalize(label);
 
-  // buckets for common overlaps
   if (/(loto|isolation|lock\s*out|tag\s*out)/i.test(t)) return "loto";
   if (/(visual|inspection|burn|water ingress|loose lug|heat mark)/i.test(t)) return "visual";
   if (/(input power|3φ|3 phase|three phase|voltage|rotation|phase sequence|supply)/i.test(t))
@@ -386,7 +415,6 @@ function actionSignature(label) {
   if (/(firmware|version|update)/i.test(t)) return "firmware";
   if (/(logs|alarms|timestamps|event log)/i.test(t)) return "logs";
 
-  // default: normalized string
   return t;
 }
 
@@ -429,19 +457,21 @@ function buildReportActionOptions({ manufacturer, faultId, yamlActions }) {
   const mfBase = getManufacturerChecklistLabels(manufacturer);
   const faultAdd = getFaultAddonLabels(faultId);
   const y = Array.isArray(yamlActions) ? yamlActions : [];
-
-  // combine, then smart-dedupe (fix overlaps like "input power verified" vs "3-phase supply present")
   return dedupeActionLabelsSmart([...mfBase, ...faultAdd, ...y]);
 }
 
-// ------------------- STATE -------------------
+/* =========================
+   STATE
+   ========================= */
 const reportState = new Map();
 
 // ✅ Decision-tree state with HISTORY
 // chatId -> { pack: "autel"|"kempower"|"tritium", faultId: string, history: string[] }
 const dtState = new Map();
 
-// ------------------- YAML DECISION TREE SUPPORT -------------------
+/* =========================
+   YAML DECISION TREE SUPPORT
+   ========================= */
 function dtCallback(pack, faultId, nodeId) {
   return `DT|${pack}|${faultId}|${nodeId}`;
 }
@@ -493,7 +523,7 @@ function popDtHistory(chatId, pack, faultId) {
   if (!cur || cur.pack !== pack || String(cur.faultId) !== String(faultId)) return null;
 
   const hist = Array.isArray(cur.history) ? [...cur.history] : [];
-  if (hist.length <= 1) return null; // nothing to go back to
+  if (hist.length <= 1) return null;
 
   hist.pop();
   const prev = hist[hist.length - 1] || null;
@@ -502,7 +532,9 @@ function popDtHistory(chatId, pack, faultId) {
   return prev;
 }
 
-// --------- REPORT TEMPLATE HELPERS (NEW) ----------
+/* =========================
+   REPORT TEMPLATE HELPERS
+   ========================= */
 function normalizeStringArray(v) {
   if (!Array.isArray(v)) return [];
   return v.map((x) => String(x || "").trim()).filter(Boolean);
@@ -515,21 +547,11 @@ function getReportTemplateFromFault(fault) {
   const verification = normalizeStringArray(rt.verification);
   const summary = String(rt.summary || "").trim();
 
-  return {
-    summary,
-    actions,
-    parts_used,
-    verification,
-  };
+  return { summary, actions, parts_used, verification };
 }
 
 function defaultReportTemplate() {
-  return {
-    summary: "",
-    actions: [],
-    parts_used: [],
-    verification: [],
-  };
+  return { summary: "", actions: [], parts_used: [], verification: [] };
 }
 
 // Legacy HTML renderer (keeps older YAML shapes working)
@@ -569,7 +591,6 @@ function reportFromFaultCallback(pack, faultId) {
 
 /**
  * ✅ FIX: standardize menu callbacks so we never collide with fault-card callbacks.
- * (This prevents "kempower:menu" being mis-parsed as a fault.)
  */
 function packMenuCallback(pack) {
   if (pack === "kempower") return "kempower:menu";
@@ -625,28 +646,23 @@ async function showFaultCard({ chatId, messageId, pack, fault }) {
 
 function imageKeyToUrl(imageKey) {
   // YAML: image: autel/ac_contactor_location   (no extension)
-  // Will serve whichever exists: .png, .jpg, .jpeg, .webp
   if (!imageKey) return "";
 
   const key = String(imageKey).trim().replace(/^\/+/, "");
-  const relBase = key.replace(/^\/*/, ""); // e.g. "autel/ac_contactor_location"
+  const relBase = key.replace(/^\/*/, "");
 
-  // If YAML already includes an extension, respect it
   const hasExt = /\.[a-z0-9]+$/i.test(relBase);
   const candidates = hasExt
     ? [relBase]
     : [`${relBase}.png`, `${relBase}.jpg`, `${relBase}.jpeg`, `${relBase}.webp`];
 
-  // If we can check local filesystem, pick the first that exists
   for (const rel of candidates) {
     const localPath = path.join(IMAGES_DIR, rel);
     if (fs.existsSync(localPath)) {
-      // Telegram needs a public URL to fetch
       return PUBLIC_URL ? `${PUBLIC_URL}/images/${rel}` : "";
     }
   }
 
-  // Fall back (if nothing exists)
   return PUBLIC_URL ? `${PUBLIC_URL}/images/${candidates[0]}` : "";
 }
 
@@ -654,7 +670,6 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   const tree = fault?.decision_tree;
   const node = tree?.nodes?.[nodeId];
 
-  // Special internal jump back to menu (from YAML)
   if (nodeId === "__MENU_KEMPOWER__") return showKempowerMenu(chatId, messageId);
   if (nodeId === "__MENU_AUTEL__") return showAutelMenu(chatId, messageId);
   if (nodeId === "__MENU_TRITIUM__") return showTritiumMenu(chatId, messageId);
@@ -672,12 +687,10 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
 
   const text = node.prompt || "…";
 
-  // 1 button per row (support YAML either opt.label or opt.text)
   const rows = (node.options || []).map((opt) => [
     { text: opt.label || opt.text || "Next", callback_data: dtCallback(pack, fault.id, opt.next) },
   ]);
 
-  // Report from within the tree too
   rows.push([
     {
       text: "🧾 Create report for this fault",
@@ -686,12 +699,10 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   ]);
 
   rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(pack, fault.id) }]);
-
   rows.push([{ text: `🏠 ${cap(pack)} menu`, callback_data: packMenuCallback(pack) }]);
 
   const imageUrl = node.image ? imageKeyToUrl(node.image) : "";
 
-  // If node has image but PUBLIC_URL is blank, we still show text (local)
   if (node.image && !imageUrl) {
     return upsertMessage(chatId, {
       messageId,
@@ -701,7 +712,6 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
     });
   }
 
-  // Prefer photo when image is defined
   return upsertPhotoOrText(chatId, {
     messageId,
     text,
@@ -711,13 +721,14 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   });
 }
 
-// ------------------- /report WIZARD -------------------
+/* =========================
+   /report WIZARD
+   ========================= */
 function setReport(chatId, patch) {
   const cur =
     reportState.get(chatId) || {
       step: "site",
       data: {
-        // NEW: actionOptions drive the checklist UI (fault-specific if available)
         actionOptions: [],
         actions: [],
 
@@ -725,19 +736,15 @@ function setReport(chatId, patch) {
         faultId: "",
         faultTitle: "",
         faultSummary: "",
-
         prefilled: false,
 
         site: "",
-        chargerIdPublic: "",          // public / billing services number
-        chargerSerialNumber: "",      // OEM S/N (required for manufacturer partner)
-        assetId: "",   // internal asset id (optional)
+        chargerIdPublic: "", // public / billing services number
+        chargerSerialNumber: "", // OEM S/N
+        assetId: "", // internal asset id (optional)
         technician: "",
         clientRef: "",
 
-
-
-        // Optional photos + notes
         photos: [],
         notes: "",
         resolution: "",
@@ -758,20 +765,10 @@ function clearReport(chatId) {
   reportState.delete(chatId);
 }
 
-// Emojis in builder ✅, but strip them in final report ✅
-function stripEmojisForFinal(s = "") {
-  return String(s)
-    .replace(/[\u{1F000}-\u{1FAFF}]/gu, "")
-    .replace(/[\u{2600}-\u{26FF}]/gu, "")
-    .replace(/[\u{2700}-\u{27BF}]/gu, "")
-    .replace(/\uFE0F/gu, "")
-    .replace(/\u200D/gu, "")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
-
 function formatReportHtml(data) {
   const site = escapeHtml(stripEmojisForFinal(data.site || ""));
+  const chargerIdPublic = escapeHtml(stripEmojisForFinal(data.chargerIdPublic || ""));
+  const chargerSerialNumber = escapeHtml(stripEmojisForFinal(data.chargerSerialNumber || ""));
   const assetId = escapeHtml(stripEmojisForFinal(data.assetId || ""));
   const technician = escapeHtml(stripEmojisForFinal(data.technician || ""));
   const clientRef = escapeHtml(stripEmojisForFinal(data.clientRef || ""));
@@ -784,32 +781,32 @@ function formatReportHtml(data) {
 
   const actions = Array.isArray(data.actions) ? data.actions : [];
   const cleanActions = actions.map((a) => stripEmojisForFinal(a)).filter(Boolean);
-  const actionsLines = cleanActions.length ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n") : "• (none recorded)";
+  const actionsLines = cleanActions.length
+    ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n")
+    : "• (none recorded)";
 
   const photos = Array.isArray(data.photos) ? data.photos : [];
   const attachmentsLine = photos.length ? `• Photos uploaded (${photos.length})` : "• None";
 
-return (
-  `🧾 <b>EVBot Service Report</b>\n\n` +
-  `<b>Site:</b> ${site}\n` +
-  `<b>Charger ID (public / billing):</b> ${chargerIdPublic || ""}\n` +
-  `<b>Charger Serial Number (S/N):</b> ${chargerSerialNumber || ""}\n` +
-  (assetId ? `<b>Asset ID (internal):</b> ${assetId}\n` : "") +
-  `<b>Technician:</b> ${technician}\n` +
-  `<b>Client reference / ticket #:</b> ${clientRef}\n` +
-  (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
-  `<b>Fault:</b> ${faultTitle}\n` +
-  (faultSummary ? `<b>Fault summary:</b> ${faultSummary}\n` : "") +
-  `\n<b>Actions Taken:</b>\n${actionsLines}\n\n` +
-  `<b>Status / Outcome:</b> ${resolution}\n` +
-  `<b>Attachments:</b>\n${attachmentsLine}\n` +
-  (notes ? `\n<b>Notes:</b>\n${notes}\n` : "")
-);
-
+  return (
+    `🧾 <b>EVBot Service Report</b>\n\n` +
+    `<b>Site:</b> ${site}\n` +
+    `<b>Charger ID (public / billing):</b> ${chargerIdPublic}\n` +
+    `<b>Charger Serial Number (S/N):</b> ${chargerSerialNumber}\n` +
+    (assetId ? `<b>Asset ID (internal):</b> ${assetId}\n` : "") +
+    `<b>Technician:</b> ${technician}\n` +
+    `<b>Client reference / ticket #:</b> ${clientRef}\n` +
+    (manufacturer ? `<b>Manufacturer:</b> ${manufacturer}\n` : "") +
+    `<b>Fault:</b> ${faultTitle}\n` +
+    (faultSummary ? `<b>Fault summary:</b> ${faultSummary}\n` : "") +
+    `\n<b>Actions Taken:</b>\n${actionsLines}\n\n` +
+    `<b>Status / Outcome:</b> ${resolution}\n` +
+    `<b>Attachments:</b>\n${attachmentsLine}\n` +
+    (notes ? `\n<b>Notes:</b>\n${notes}\n` : "")
+  );
 }
 
 async function startReport(chatId) {
-  // reset report state
   setReport(chatId, {
     step: "site",
     data: {
@@ -820,10 +817,14 @@ async function startReport(chatId) {
       faultTitle: "",
       faultSummary: "",
       prefilled: false,
+
       site: "",
+      chargerIdPublic: "",
+      chargerSerialNumber: "",
       assetId: "",
       technician: "",
       clientRef: "",
+
       photos: [],
       notes: "",
       resolution: "",
@@ -835,7 +836,7 @@ async function startReport(chatId) {
   });
 }
 
-// Start report with manufacturer+fault prefilled + manufacturer+fault checklist (NEW)
+// Start report with manufacturer+fault prefilled + manufacturer+fault checklist
 async function startReportFromFault(chatId, pack, fault) {
   const t = getReportTemplateFromFault(fault) || defaultReportTemplate();
 
@@ -855,10 +856,14 @@ async function startReportFromFault(chatId, pack, fault) {
       faultTitle: fault?.title || "",
       faultSummary: String(t.summary || "").trim(),
       prefilled: true,
+
       site: "",
+      chargerIdPublic: "",
+      chargerSerialNumber: "",
       assetId: "",
       technician: "",
       clientRef: "",
+
       photos: [],
       notes: "",
       resolution: "",
@@ -867,16 +872,32 @@ async function startReportFromFault(chatId, pack, fault) {
 
   return bot.sendMessage(
     chatId,
-    `🧾 <b>Report Builder</b>\n\nPrefilled:\n<b>Manufacturer:</b> ${escapeHtml(cap(pack))}\n<b>Fault:</b> ${escapeHtml(
-      fault?.title || ""
-    )}\n\nWhat is the <b>site name</b>?\n\n(Reply with text)`,
+    `🧾 <b>Report Builder</b>\n\nPrefilled:\n<b>Manufacturer:</b> ${escapeHtml(
+      cap(pack)
+    )}\n<b>Fault:</b> ${escapeHtml(fault?.title || "")}\n\nWhat is the <b>site name</b>?\n\n(Reply with text)`,
     { parse_mode: "HTML" }
   );
 }
 
+async function askChargerIdPublic(chatId) {
+  setReport(chatId, { step: "chargerIdPublic" });
+  return bot.sendMessage(chatId, "What is the <b>Charger ID</b> (public / billing services number)?\n\n(Reply with text)", {
+    parse_mode: "HTML",
+  });
+}
+
+async function askChargerSerialNumber(chatId) {
+  setReport(chatId, { step: "chargerSerialNumber" });
+  return bot.sendMessage(chatId, "What is the <b>Charger Serial Number</b> (S/N)?\n\n(Reply with text)", {
+    parse_mode: "HTML",
+  });
+}
+
 async function askAssetId(chatId) {
   setReport(chatId, { step: "assetId" });
-  return bot.sendMessage(chatId, "What is the <b>asset ID</b>?\n\n(Reply with text)", { parse_mode: "HTML" });
+  return bot.sendMessage(chatId, "What is the <b>asset ID</b> (internal, optional)?\n\n(Reply with text or type N/A)", {
+    parse_mode: "HTML",
+  });
 }
 
 async function askTechnician(chatId) {
@@ -940,7 +961,7 @@ async function askFault(chatId) {
   });
 }
 
-// Fallback generic checklist options (used when mfr + fault addons + YAML actions are empty)
+// Fallback generic checklist options
 const REPORT_ACTION_OPTIONS = [
   "Firmware update performed",
   "Power cycle performed",
@@ -1003,7 +1024,6 @@ async function askResolution(chatId) {
   });
 }
 
-
 async function askUploadPhotos(chatId) {
   setReport(chatId, { step: "UPLOAD_PHOTOS" });
 
@@ -1055,7 +1075,9 @@ async function finishReport(chatId) {
   });
 }
 
-// ------------------- MENUS -------------------
+/* =========================
+   MENUS
+   ========================= */
 function showManufacturerMenu(chatId, messageId) {
   resetDt(chatId);
 
@@ -1084,7 +1106,6 @@ function buildPackMenuKeyboard(pack) {
   if (!faults.length) {
     rows.push([{ text: `⚠️ No ${cap(pack)} faults loaded (check /debug/${pack})`, callback_data: "noop" }]);
   } else {
-    // ✅ callback_data includes the RIGHT PACK
     const prefix = pack.toUpperCase(); // AUTEL / KEMPOWER / TRITIUM
     faults.forEach((f) => rows.push([{ text: f.title, callback_data: `${prefix}:${f.id}` }]));
   }
@@ -1123,7 +1144,9 @@ async function showTritiumMenu(chatId, messageId) {
   });
 }
 
-// ------------------- COMMANDS -------------------
+/* =========================
+   COMMANDS
+   ========================= */
 bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
   clearReport(chatId);
@@ -1185,6 +1208,16 @@ bot.on("message", async (msg) => {
 
   if (st.step === "site") {
     setReport(chatId, { data: { site: text } });
+    return askChargerIdPublic(chatId);
+  }
+
+  if (st.step === "chargerIdPublic") {
+    setReport(chatId, { data: { chargerIdPublic: text } });
+    return askChargerSerialNumber(chatId);
+  }
+
+  if (st.step === "chargerSerialNumber") {
+    setReport(chatId, { data: { chargerSerialNumber: text } });
     return askAssetId(chatId);
   }
 
@@ -1232,11 +1265,12 @@ bot.on("photo", async (msg) => {
 
   setReport(chatId, { data: { photos: curPhotos } });
 
-  // Keep UX clean: acknowledge once per upload
   return bot.sendMessage(chatId, "📸 Photo added. Upload more, or tap Done.");
 });
 
-// ------------------- SINGLE CALLBACK HANDLER -------------------
+/* =========================
+   SINGLE CALLBACK HANDLER
+   ========================= */
 bot.on("callback_query", async (q) => {
   const chatId = q?.message?.chat?.id;
   const messageId = q?.message?.message_id;
@@ -1249,21 +1283,18 @@ bot.on("callback_query", async (q) => {
   if (!chatId) return;
   if (data === "noop") return;
 
-  // Global reset -> go to manufacturer menu
   if (data === "reset") {
     clearReport(chatId);
     resetDt(chatId);
     return showManufacturerMenu(chatId, messageId);
   }
 
-  // Back to manufacturer menu
   if (data === "menu:mfr") {
     clearReport(chatId);
     resetDt(chatId);
     return showManufacturerMenu(chatId, messageId);
   }
 
-  // Manufacturer selection
   if (data.startsWith("mfr:")) {
     const mfr = data.split(":")[1];
     if (mfr === "autel") return showAutelMenu(chatId, messageId);
@@ -1281,7 +1312,6 @@ bot.on("callback_query", async (q) => {
     return showAutelMenu(chatId, messageId);
   }
 
-  // Report from fault card / decision tree (autofill + manufacturer+fault checklist)
   if (data.startsWith("RF|")) {
     const [, pack, faultId] = data.split("|");
     const fault = getFaultById(pack, faultId);
@@ -1290,7 +1320,6 @@ bot.on("callback_query", async (q) => {
     return startReportFromFault(chatId, pack, fault);
   }
 
-  // ✅ DT BACK ONE STEP
   if (data.startsWith("DTB|")) {
     const [, pack, faultId] = data.split("|");
     const fault = getFaultById(pack, faultId);
@@ -1309,7 +1338,6 @@ bot.on("callback_query", async (q) => {
     return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId: prevNode });
   }
 
-  // YAML decision tree next node
   if (data.startsWith("DT|")) {
     const [, pack, faultId, nodeId] = data.split("|");
     const fault = getFaultById(pack, faultId);
@@ -1343,7 +1371,7 @@ bot.on("callback_query", async (q) => {
   }
 
   if (data.startsWith("r:mfr:")) {
-    const mfr = data.split(":")[2]; // autel | kempower | tritium
+    const mfr = data.split(":")[2];
 
     const actionOptionsBuilt = buildReportActionOptions({
       manufacturer: mfr,
@@ -1365,10 +1393,9 @@ bot.on("callback_query", async (q) => {
     return askFault(chatId);
   }
 
-  // Selecting a fault from /report flow -> inject manufacturer base + fault addons + YAML actions
   if (data.startsWith("r:fault:")) {
-    const parts = data.split(":"); // r:fault:AUTEL:<id> OR r:fault:KEMPOWER:<id> OR r:fault:TRITIUM:<id>
-    const type = parts[2]; // AUTEL/KEMPOWER/TRITIUM
+    const parts = data.split(":");
+    const type = parts[2];
     const id = parts[3];
 
     const pack = type === "KEMPOWER" ? "kempower" : type === "TRITIUM" ? "tritium" : "autel";
@@ -1416,7 +1443,6 @@ bot.on("callback_query", async (q) => {
 
     setReport(chatId, { data: { actions: Array.from(selected) } });
 
-    // include context header
     const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
     const mfr = st?.data?.manufacturer ? `\n<b>Manufacturer:</b> ${escapeHtml(cap(st.data.manufacturer))}` : "";
 
@@ -1434,7 +1460,6 @@ bot.on("callback_query", async (q) => {
     return askUploadPhotos(chatId);
   }
 
-  // Photo step buttons
   if (data === "PHOTOS_SKIP" || data === "PHOTOS_DONE") {
     return askNotes(chatId);
   }
@@ -1493,7 +1518,9 @@ bot.on("callback_query", async (q) => {
   // ignore unknown callback data
 });
 
-// ------------------- WEBHOOK ROUTE (Railway) -------------------
+/* =========================
+   WEBHOOK ROUTE (Railway)
+   ========================= */
 if (useWebhook) {
   app.post(WEBHOOK_PATH, (req, res) => {
     if (TELEGRAM_WEBHOOK_SECRET) {
@@ -1506,7 +1533,9 @@ if (useWebhook) {
   });
 }
 
-// ------------------- START SERVER + WEBHOOK SETUP -------------------
+/* =========================
+   START SERVER + WEBHOOK SETUP
+   ========================= */
 app.listen(PORT, "0.0.0.0", async () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`Mode: ${useWebhook ? "WEBHOOK" : "POLLING"}`);
