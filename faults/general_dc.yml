@@ -933,8 +933,15 @@ faults:
           actions:
             - "Use service menu reboot if available"
             - "If no UI access: full power cycle per procedure"
-            - "If recurring: capture evidence (photo/video) and escalate (possible storage/OS issue)"
+            - "If recurring: capture evidence (photo/video) and escalate (possible HMI/OS/storage issue)"
           next: end
+
+        end:
+          prompt: "✅ End of flow.\n\nIf unresolved:\n• Capture photo/video of the frozen screen\n• Note timestamp + charger ID\n• Record what reboot method was used\n\nUse **Create report for this fault** to document the job."
+          options:
+            - label: "⬅️ Back"
+              next: check_active_session
+
 
 
   # --------------------
