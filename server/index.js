@@ -1377,12 +1377,24 @@ bot.on("callback_query", async (q) => {
   const messageId = q?.message?.message_id;
   const data = q?.data || "";
 
-  try {
-    await bot.answerCallbackQuery(q.id);
-  } catch (_) {}
+  // Answer callback ONCE (safe)
+  try { await bot.answerCallbackQuery(q.id); } catch (_) {}
+
+  // ✅ HARD GUARDS (prevents loops + log floods)
+  // 1) Ignore old callbacks (Telegram retries / deploy churn)
+  const msgDate = q?.message?.date; // seconds
+  if (msgDate && (Date.now() / 1000 - msgDate) > 120) return;
+
+  // 2) Per-chat rate limit (stops button spam / runaway loops)
+  global.__EVBOT_CB_RL = global.__EVBOT_CB_RL || new Map();
+  const now = Date.now();
+  const last = chatId ? (global.__EVBOT_CB_RL.get(chatId) || 0) : 0;
+  if (chatId && (now - last) < 350) return;
+  if (chatId) global.__EVBOT_CB_RL.set(chatId, now);
 
   if (!chatId) return;
   if (data === "noop") return;
+
 
   if (data === "reset") {
     clearReport(chatId);
