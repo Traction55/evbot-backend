@@ -1,17 +1,14 @@
-# general_dc.yml
+# faults/general_dc.yml
 # EVBot Fault Pack: General DC Charger (All Brands) — On-site Technician v1 (Jan 2026)
-# Purpose:
-# - OEM-agnostic fault library for common DC fast charger issues across all manufacturers
-# - Node-based decision trees: start_node + nodes map
-# - Safe, field-ready steps with strong emphasis on isolation/LV checks before HV work
 #
-# Notes:
-# - platform: general_dc
-# - Keep IDs stable so your bot can deep-link (e.g., /general_dc will_not_power_on)
-# - You can add images later (optional) using:
-#     image: general_dc/<filename_without_extension>
-#   and store files at:
-#     assets/images/general_dc/<filename>.png
+# Purpose:
+# - OEM-agnostic fault library for common DC fast charger issues across manufacturers
+# - Node-based decision trees: decision_tree.start_node + decision_tree.nodes
+#
+# Compatible with EVBot index.js (Telegram):
+# - Fault card shows response.telegram_markdown (preferred)
+# - “Start troubleshooting” button appears when decision_tree exists
+# - node.options MUST be a LIST of {label, next}
 
 faults:
 
@@ -25,6 +22,8 @@ faults:
       - "blank screen"
       - "won't turn on"
       - "no display"
+      - "won't power on"
+      - "will not power on"
     triggers:
       any_text_contains:
         - "no power"
@@ -35,71 +34,95 @@ faults:
         - "will not power on"
     severity: high
     tags: [power, supply, breaker, interlock, control_power]
-    start_node: safety_first
-    nodes:
-      safety_first:
-        prompt: "Safety first: is the site safe to troubleshoot and can you apply LOTO if opening cabinets?"
-        options:
-          "✅ Yes": check_upstream_supply
-          "❌ No / Not sure": stop_and_escalate
 
-      stop_and_escalate:
-        prompt: "Do not proceed. Make the area safe, apply isolation, and escalate per procedure."
-        actions:
-          - "Follow site isolation and SWMS/JSA requirements"
-          - "Escalate to supervisor/OEM if you cannot isolate safely"
-        next: end
+    response:
+      telegram_markdown: |
+        🧰 **Will Not Power On (Dead / No Display)**  
+        Quick triage before any invasive work.
 
-      check_upstream_supply:
-        prompt: "Is upstream supply available (breaker/isolator ON) and correct AC voltage present at charger incomer?"
-        options:
-          "❌ No (breaker tripped / isolator OFF / missing voltage)": restore_supply
-          "✅ Yes (voltage confirmed)": check_e_stop_interlocks
+        **Common causes**
+        - Upstream supply off / breaker trip
+        - E-Stop / safety interlock open
+        - Control power (LV PSU) failure
+        - Controller not booting
 
-      restore_supply:
-        prompt: "Restore supply if permitted and safe."
-        actions:
-          - "Check upstream breaker/RCBO and reset if safe"
-          - "Verify isolator position"
-          - "Measure phase-to-phase and phase-to-neutral as applicable"
-          - "If breaker trips again, do NOT keep resetting—investigate cause"
-        next: check_e_stop_interlocks
+        Tap **Start troubleshooting** to follow a safe step-by-step flow.
 
-      check_e_stop_interlocks:
-        prompt: "Are Emergency Stop / door interlocks / site interlocks active?"
-        options:
-          "✅ Active (E-stop pressed / door open / interlock open)": clear_interlocks
-          "❌ Not active": check_control_power
+    decision_tree:
+      start_node: safety_first
+      nodes:
 
-      clear_interlocks:
-        prompt: "Clear interlocks and re-test power-up."
-        actions:
-          - "Reset E-stop(s) (including remote E-stops if present)"
-          - "Close and latch cabinet doors"
-          - "Check fire alarm / site interlock input if applicable"
-        next: check_control_power
+        safety_first:
+          prompt: "🔒 Safety first: is the site safe to troubleshoot, and can you apply LOTO if opening cabinets?"
+          options:
+            - label: "✅ Yes"
+              next: check_upstream_supply
+            - label: "❌ No / Not sure"
+              next: stop_and_escalate
 
-      check_control_power:
-        prompt: "Is control power present (e.g., 24V/12V) and controller LEDs/status normal?"
-        options:
-          "✅ Yes (control power OK)": attempt_power_cycle
-          "❌ No / unstable": inspect_aux_psu
+        stop_and_escalate:
+          prompt: "Do not proceed. Make the area safe, apply isolation, and escalate per procedure."
+          actions:
+            - "Follow site isolation and SWMS/JSA requirements"
+            - "Escalate to supervisor/OEM if you cannot isolate safely"
+          next: end
 
-      inspect_aux_psu:
-        prompt: "Aux/control PSU may be failed or supply to it is missing."
-        actions:
-          - "Check internal fuses feeding control PSU"
-          - "Check LV PSU output rails if accessible and permitted"
-          - "Look for burnt smell, discoloration, loose LV terminals"
-        next: end
+        check_upstream_supply:
+          prompt: "Is upstream supply available (breaker/isolator ON) and correct AC voltage present at charger incomer?"
+          options:
+            - label: "❌ No (breaker tripped / isolator OFF / missing voltage)"
+              next: restore_supply
+            - label: "✅ Yes (voltage confirmed)"
+              next: check_e_stop_interlocks
 
-      attempt_power_cycle:
-        prompt: "Perform a full power cycle (de-energize long enough for capacitors to discharge) then re-test."
-        actions:
-          - "Power OFF at upstream isolator (LOTO if opening)"
-          - "Wait per OEM guidance (commonly 2–5 minutes)"
-          - "Power ON and observe boot sequence / alarms"
-        next: end
+        restore_supply:
+          prompt: "Restore supply if permitted and safe."
+          actions:
+            - "Check upstream breaker/RCBO and reset if safe"
+            - "Verify isolator position"
+            - "Measure phase-to-phase and phase-to-neutral as applicable"
+            - "If breaker trips again, do NOT keep resetting—investigate cause"
+          next: check_e_stop_interlocks
+
+        check_e_stop_interlocks:
+          prompt: "Are Emergency Stop / door interlocks / site interlocks active?"
+          options:
+            - label: "✅ Yes (E-stop pressed / door open / interlock open)"
+              next: clear_interlocks
+            - label: "❌ No (not active)"
+              next: check_control_power
+
+        clear_interlocks:
+          prompt: "Clear interlocks and re-test power-up."
+          actions:
+            - "Reset E-stop(s) (including remote E-stops if present)"
+            - "Close and latch cabinet doors"
+            - "Check fire alarm / site interlock input if applicable"
+          next: check_control_power
+
+        check_control_power:
+          prompt: "Is control power present (e.g., 24V/12V) and controller LEDs/status normal?"
+          options:
+            - label: "✅ Yes (control power OK)"
+              next: attempt_power_cycle
+            - label: "❌ No / unstable"
+              next: inspect_aux_psu
+
+        inspect_aux_psu:
+          prompt: "Aux/control PSU may be failed or supply to it is missing."
+          actions:
+            - "Check internal fuses feeding control PSU"
+            - "Check LV PSU output rails if accessible and permitted"
+            - "Look for burnt smell, discoloration, loose LV terminals"
+          next: end
+
+        attempt_power_cycle:
+          prompt: "Perform a full power cycle (de-energize long enough for capacitors to discharge) then re-test."
+          actions:
+            - "Power OFF at upstream isolator (LOTO if opening)"
+            - "Wait per OEM guidance (commonly 2–5 minutes)"
+            - "Power ON and observe boot sequence / alarms"
+          next: end
 
 
   - id: general_dc_powers_on_wont_start_charge
@@ -122,103 +145,141 @@ faults:
         - "plugged in but won't charge"
     severity: high
     tags: [session, authorisation, contactor, precharge, handshake]
-    start_node: confirm_basics
-    nodes:
-      confirm_basics:
-        prompt: "Confirm basics: connector fully latched, correct connector selected, and charger shows 'Ready'?"
-        options:
-          "✅ Yes": try_known_good_vehicle
-          "❌ No": fix_basic_issue
 
-      fix_basic_issue:
-        prompt: "Resolve basic readiness issues."
-        actions:
-          - "Reseat connector and ensure latch engaged"
-          - "Try alternate connector (if available)"
-          - "Confirm charger is not in 'Fault' or 'E-stop' state"
-        next: try_known_good_vehicle
+    response:
+      telegram_markdown: |
+        🧰 **Powers On but Won’t Start Charging**
+        Use this when the unit is alive, but sessions won’t begin.
 
-      try_known_good_vehicle:
-        prompt: "Have you tried a known-good vehicle and a second connector (if available)?"
-        options:
-          "✅ Yes (still fails)": check_authorisation
-          "❌ No": do_vehicle_swap
+        **Typical causes**
+        - Authorisation/backend issues
+        - Interlocks/insulation blocking start
+        - Handshake/connector problems
+        - HV precharge/contactor faults
 
-      do_vehicle_swap:
-        prompt: "Test with a known-good vehicle (or different EV) to isolate vehicle-side issues."
-        actions:
-          - "Try a second EV if available"
-          - "Try a second connector/plug (if dual/tri-head)"
-        next: check_authorisation
+        Tap **Start troubleshooting**.
 
-      check_authorisation:
-        prompt: "Is this a backend/RFID/app authorisation site (not free-vend)?"
-        options:
-          "✅ Yes": check_backend_signals
-          "❌ No / Free-vend": check_charger_faults
+    decision_tree:
+      start_node: confirm_basics
+      nodes:
 
-      check_backend_signals:
-        prompt: "Do you see payment/app/RFID errors, or 'Authorisation failed' messages?"
-        options:
-          "✅ Yes": backend_checks
-          "❌ No": check_charger_faults
+        confirm_basics:
+          prompt: "Confirm basics: connector fully latched, correct connector selected, and charger shows 'Ready'?"
+          options:
+            - label: "✅ Yes"
+              next: try_known_good_vehicle
+            - label: "❌ No"
+              next: fix_basic_issue
 
-      backend_checks:
-        prompt: "Backend checks (no OEM tools required)."
-        actions:
-          - "Confirm charger is online/connected (modem/Ethernet up)"
-          - "Check site connectivity / signal strength"
-          - "Confirm correct site tariff/tenant config (if known)"
-          - "Capture exact on-screen error + timestamp for backend support"
-        next: check_charger_faults
+        fix_basic_issue:
+          prompt: "Resolve basic readiness issues."
+          actions:
+            - "Reseat connector and ensure latch engaged"
+            - "Try alternate connector (if available)"
+            - "Confirm charger is not in 'Fault' or 'E-stop' state"
+          next: try_known_good_vehicle
 
-      check_charger_faults:
-        prompt: "Does the charger show a fault that blocks start (e.g., isolation, contactor, precharge, overtemp)?"
-        options:
-          "✅ Yes": route_by_fault_type
-          "❌ No obvious fault": attempt_soft_reset
+        try_known_good_vehicle:
+          prompt: "Have you tried a known-good vehicle and (if available) a second connector?"
+          options:
+            - label: "✅ Yes (still fails)"
+              next: check_authorisation
+            - label: "❌ No"
+              next: do_vehicle_swap
 
-      route_by_fault_type:
-        prompt: "Pick the closest fault type shown."
-        options:
-          "🟪 Insulation / Earth fault": goto_isolation_fault
-          "⬛ E-stop / Interlock": goto_interlock_fault
-          "🟫 Overtemp / Cooling": goto_overtemp_fault
-          "🟦 Handshake / Vehicle comms": goto_handshake_fault
-          "🟥 Contactor / Precharge / HV": hv_block_fault
+        do_vehicle_swap:
+          prompt: "Test with a known-good EV (or different EV) to isolate vehicle-side issues."
+          actions:
+            - "Try a second EV if available"
+            - "Try a second connector/plug (if dual/tri-head)"
+          next: check_authorisation
 
-      hv_block_fault:
-        prompt: "HV start blocked (contactor/precharge). Perform safe, non-invasive checks first."
-        actions:
-          - "Power cycle the charger (full restart)"
-          - "Inspect for burnt smell, discoloration, loose terminations (visual only unless authorised)"
-          - "If modular: reseat accessible modules/connectors only if permitted and isolated"
-          - "Escalate with fault code + timestamp if persists"
-        next: end
+        check_authorisation:
+          prompt: "Is this a backend/RFID/app authorisation site (not free-vend)?"
+          options:
+            - label: "✅ Yes"
+              next: check_backend_signals
+            - label: "❌ No / Free-vend"
+              next: check_charger_faults
 
-      attempt_soft_reset:
-        prompt: "Try a controlled restart and re-test."
-        actions:
-          - "Reboot via HMI/service menu if available"
-          - "If not: full power cycle at isolator (per procedure)"
-          - "Re-test session start"
-        next: end
+        check_backend_signals:
+          prompt: "Do you see payment/app/RFID errors, or 'Authorisation failed' messages?"
+          options:
+            - label: "✅ Yes"
+              next: backend_checks
+            - label: "❌ No"
+              next: check_charger_faults
 
-      goto_isolation_fault:
-        prompt: "Go to: 'Insulation / Earth Fault' fault pack item."
-        next: end
+        backend_checks:
+          prompt: "Backend checks (no OEM tools required)."
+          actions:
+            - "Confirm charger is online/connected (modem/Ethernet up)"
+            - "Check site connectivity / signal strength"
+            - "Capture exact on-screen error + timestamp for backend support"
+          next: check_charger_faults
 
-      goto_interlock_fault:
-        prompt: "Go to: 'Emergency Stop / Safety Interlock Active' fault pack item."
-        next: end
+        check_charger_faults:
+          prompt: "Does the charger show a fault that blocks start (isolation, interlock, overtemp, handshake, HV/precharge)?"
+          options:
+            - label: "✅ Yes"
+              next: route_by_fault_type
+            - label: "❌ No obvious fault"
+              next: attempt_soft_reset
 
-      goto_overtemp_fault:
-        prompt: "Go to: 'Overtemperature / Cooling Fault' fault pack item."
-        next: end
+        route_by_fault_type:
+          prompt: "Pick the closest fault type shown."
+          options:
+            - label: "🟪 Insulation / Earth fault"
+              next: goto_isolation_fault
+            - label: "⬛ E-stop / Interlock"
+              next: goto_interlock_fault
+            - label: "🟫 Overtemp / Cooling"
+              next: goto_overtemp_fault
+            - label: "🟦 Handshake / Vehicle comms"
+              next: goto_handshake_fault
+            - label: "🟥 Contactor / Precharge / HV block"
+              next: hv_block_fault
 
-      goto_handshake_fault:
-        prompt: "Go to: 'Vehicle Connection / Handshake Failure' fault pack item."
-        next: end
+        hv_block_fault:
+          prompt: "HV start blocked (contactor/precharge). Perform safe, non-invasive checks first."
+          actions:
+            - "Full power cycle the charger (controlled restart)"
+            - "Visual inspection for heat damage/burnt smell (no covers unless authorised)"
+            - "If modular and permitted: reseat accessible modules/connectors only when isolated"
+            - "Capture fault code + timestamp and escalate if persists"
+          next: end
+
+        attempt_soft_reset:
+          prompt: "Try a controlled restart and re-test."
+          actions:
+            - "Reboot via HMI/service menu if available"
+            - "If not: full power cycle at isolator (per procedure)"
+            - "Re-test session start"
+          next: end
+
+        goto_isolation_fault:
+          prompt: "Go to the **Insulation / Earth Fault** item in General DC."
+          actions:
+            - "Back out to the General DC menu and select: 🟪 Insulation / Earth Fault"
+          next: end
+
+        goto_interlock_fault:
+          prompt: "Go to the **Emergency Stop / Safety Interlock Active** item in General DC."
+          actions:
+            - "Back out to the General DC menu and select: ⬛ E-Stop / Interlock"
+          next: end
+
+        goto_overtemp_fault:
+          prompt: "Go to the **Overtemperature / Cooling Fault** item in General DC."
+          actions:
+            - "Back out to the General DC menu and select: 🟫 Overtemp / Cooling"
+          next: end
+
+        goto_handshake_fault:
+          prompt: "Go to the **Vehicle Connection / Handshake Failure** item in General DC."
+          actions:
+            - "Back out to the General DC menu and select: 🟦 Handshake Failure"
+          next: end
 
 
   - id: general_dc_offline_backend_comms
@@ -245,76 +306,93 @@ faults:
         - "sim"
     severity: high
     tags: [comms, ocpp, modem, ethernet, sim, apn]
-    start_node: identify_link_type
-    nodes:
-      identify_link_type:
-        prompt: "What connection type is in use?"
-        options:
-          "📶 Cellular/LTE (SIM modem)": lte_checks
-          "🔌 Ethernet": ethernet_checks
-          "❓ Not sure": generic_comms_checks
 
-      generic_comms_checks:
-        prompt: "Do basic comms checks."
-        actions:
-          - "Check HMI for 'Offline' / comms alarms"
-          - "Verify router/modem has power and indicators"
-          - "Power cycle comms equipment first, then charger controller"
-          - "Capture error text + timestamp"
-        next: end
+    response:
+      telegram_markdown: |
+        🧰 **Offline / Backend Comms Down (OCPP / LTE / Ethernet)**
+        Use this when the charger is “Offline” or not talking to backend.
 
-      lte_checks:
-        prompt: "LTE checks: do modem LEDs show power + network connection?"
-        options:
-          "✅ Yes (appears connected)": apn_backend_checks
-          "❌ No (no signal / no network)": sim_signal_checks
+        Tap **Start troubleshooting**.
 
-      sim_signal_checks:
-        prompt: "SIM/signal checks."
-        actions:
-          - "Check antenna connections"
-          - "Confirm SIM seated (if accessible and permitted)"
-          - "Check signal strength on HMI (if available)"
-          - "Move/inspect antenna for damage"
-        next: reboot_sequence
+    decision_tree:
+      start_node: identify_link_type
+      nodes:
 
-      apn_backend_checks:
-        prompt: "If connected but still offline, likely APN/backend config or server issue."
-        actions:
-          - "Confirm APN settings (if accessible)"
-          - "Check if other chargers on site are also offline"
-          - "Escalate to backend team with charger ID + ICCID/IMEI + timestamp"
-        next: reboot_sequence
+        identify_link_type:
+          prompt: "What connection type is in use?"
+          options:
+            - label: "📶 Cellular/LTE (SIM modem)"
+              next: lte_checks
+            - label: "🔌 Ethernet"
+              next: ethernet_checks
+            - label: "❓ Not sure"
+              next: generic_comms_checks
 
-      ethernet_checks:
-        prompt: "Ethernet checks: link lights present at switch/port?"
-        options:
-          "✅ Yes": ip_backend_checks
-          "❌ No": physical_ethernet_checks
+        generic_comms_checks:
+          prompt: "Do basic comms checks."
+          actions:
+            - "Check HMI for 'Offline' / comms alarms"
+            - "Verify router/modem has power and indicators"
+            - "Power cycle comms equipment first, then charger controller"
+            - "Capture error text + timestamp"
+          next: reboot_sequence
 
-      physical_ethernet_checks:
-        prompt: "Restore physical Ethernet link."
-        actions:
-          - "Reseat Ethernet at charger + switch"
-          - "Inspect cable for damage"
-          - "Try alternate switch port/cable if permitted"
-        next: reboot_sequence
+        lte_checks:
+          prompt: "LTE checks: do modem indicators show power + network connection?"
+          options:
+            - label: "✅ Yes (appears connected)"
+              next: apn_backend_checks
+            - label: "❌ No (no signal / no network)"
+              next: sim_signal_checks
 
-      ip_backend_checks:
-        prompt: "If link is up but still offline, suspect IP/DHCP/firewall/backend."
-        actions:
-          - "Confirm site network is up (ask site / check router)"
-          - "If permitted, confirm DHCP lease / IP settings on charger"
-          - "Escalate with charger MAC/IP (if available) + timestamp"
-        next: reboot_sequence
+        sim_signal_checks:
+          prompt: "SIM/signal checks."
+          actions:
+            - "Check antenna connections"
+            - "Confirm SIM seated (if accessible and permitted)"
+            - "Check signal strength on HMI (if available)"
+            - "Inspect antenna/cable for damage"
+          next: reboot_sequence
 
-      reboot_sequence:
-        prompt: "Perform controlled reboot order."
-        actions:
-          - "Reboot modem/router first"
-          - "Then reboot charger controller/HMI"
-          - "Wait for reconnect (several minutes) and re-check status"
-        next: end
+        apn_backend_checks:
+          prompt: "If connected but still offline, likely APN/backend config or server issue."
+          actions:
+            - "Confirm APN settings (if accessible)"
+            - "Check if other chargers on site are also offline"
+            - "Escalate to backend team with charger ID + ICCID/IMEI + timestamp"
+          next: reboot_sequence
+
+        ethernet_checks:
+          prompt: "Ethernet checks: link lights present at switch/port?"
+          options:
+            - label: "✅ Yes"
+              next: ip_backend_checks
+            - label: "❌ No"
+              next: physical_ethernet_checks
+
+        physical_ethernet_checks:
+          prompt: "Restore physical Ethernet link."
+          actions:
+            - "Reseat Ethernet at charger + switch"
+            - "Inspect cable for damage"
+            - "Try alternate switch port/cable if permitted"
+          next: reboot_sequence
+
+        ip_backend_checks:
+          prompt: "If link is up but still offline, suspect IP/DHCP/firewall/backend."
+          actions:
+            - "Confirm site network is up (ask site / check router)"
+            - "If permitted, confirm DHCP lease / IP settings on charger"
+            - "Escalate with charger MAC/IP (if available) + timestamp"
+          next: reboot_sequence
+
+        reboot_sequence:
+          prompt: "Perform controlled reboot order."
+          actions:
+            - "Reboot modem/router first"
+            - "Then reboot charger controller/HMI"
+            - "Wait for reconnect (several minutes) and re-check status"
+          next: end
 
 
   - id: general_dc_vehicle_handshake_failure
@@ -338,75 +416,95 @@ faults:
         - "pp"
     severity: medium
     tags: [handshake, connector, cable, cp, pp]
-    start_node: inspect_connector
-    nodes:
-      inspect_connector:
-        prompt: "Inspect connector and cable: any bent pins, debris, water, burn marks, damaged latch?"
-        options:
-          "✅ Looks OK": reseat_and_retry
-          "❌ Damage/contamination found": clean_or_isolate
 
-      clean_or_isolate:
-        prompt: "If contamination or damage is present, do not force operation."
-        actions:
-          - "If safe: dry/clean external debris only (no solvents unless approved)"
-          - "If pins are burnt/bent or water ingress suspected: take out of service and escalate"
-          - "Capture clear photos for report"
-        next: end
+    response:
+      telegram_markdown: |
+        🧰 **Vehicle Connection / Handshake Failure**
+        Use this when plugged in, but the session won’t begin or “vehicle not detected”.
 
-      reseat_and_retry:
-        prompt: "Reseat connector firmly and ensure latch engages. Try again."
-        options:
-          "✅ Session starts": end_success
-          "❌ Still fails": try_other_connector_or_ev
+        Tap **Start troubleshooting**.
 
-      try_other_connector_or_ev:
-        prompt: "Try another connector (if available) or a known-good EV."
-        options:
-          "✅ Works on other connector/EV": likely_local_issue
-          "❌ Fails on all": check_interlocks_and_faults
+    decision_tree:
+      start_node: inspect_connector
+      nodes:
 
-      likely_local_issue:
-        prompt: "Issue is likely connector/cable-specific or vehicle-specific."
-        actions:
-          - "Tag faulty connector/cable for repair if repeatable"
-          - "Document which EV/connector combinations fail"
-        next: end
+        inspect_connector:
+          prompt: "Inspect connector/cable: any bent pins, debris, water, burn marks, damaged latch?"
+          options:
+            - label: "✅ Looks OK"
+              next: reseat_and_retry
+            - label: "❌ Damage/contamination found"
+              next: clean_or_isolate
 
-      check_interlocks_and_faults:
-        prompt: "Any safety interlock, insulation, or fault message shown on HMI?"
-        options:
-          "⬛ Interlock/E-stop": goto_interlock_fault
-          "🟪 Insulation/Earth fault": goto_isolation_fault
-          "🟥 Other fault shown": capture_and_escalate
-          "❓ No fault shown": reboot_and_retry
+        clean_or_isolate:
+          prompt: "If contamination or damage is present, do not force operation."
+          actions:
+            - "If safe: dry/clean external debris only (no solvents unless approved)"
+            - "If pins are burnt/bent or water ingress suspected: take out of service and escalate"
+            - "Capture clear photos for report"
+          next: end
 
-      reboot_and_retry:
-        prompt: "Perform a controlled reboot and retry handshake."
-        actions:
-          - "Reboot HMI/controller"
-          - "If still failing: full power cycle per procedure"
-          - "Re-test with known-good EV"
-        next: end
+        reseat_and_retry:
+          prompt: "Reseat connector firmly and ensure latch engages. Try again."
+          options:
+            - label: "✅ Session starts"
+              next: end_success
+            - label: "❌ Still fails"
+              next: try_other_connector_or_ev
 
-      capture_and_escalate:
-        prompt: "Capture the exact message/code and escalate."
-        actions:
-          - "Record error code/text, timestamp, and EV model"
-          - "Take photo of HMI fault screen"
-        next: end
+        try_other_connector_or_ev:
+          prompt: "Try another connector (if available) or a known-good EV."
+          options:
+            - label: "✅ Works on other connector/EV"
+              next: likely_local_issue
+            - label: "❌ Fails on all"
+              next: check_interlocks_and_faults
 
-      goto_interlock_fault:
-        prompt: "Go to: 'Emergency Stop / Safety Interlock Active' fault pack item."
-        next: end
+        likely_local_issue:
+          prompt: "Issue is likely connector/cable-specific or vehicle-specific."
+          actions:
+            - "Tag faulty connector/cable for repair if repeatable"
+            - "Document which EV/connector combinations fail"
+          next: end
 
-      goto_isolation_fault:
-        prompt: "Go to: 'Insulation / Earth Fault' fault pack item."
-        next: end
+        check_interlocks_and_faults:
+          prompt: "Any safety interlock, insulation, or fault message shown on HMI?"
+          options:
+            - label: "⬛ Interlock/E-stop shown"
+              next: suggest_interlock
+            - label: "🟪 Insulation/Earth fault shown"
+              next: suggest_isolation
+            - label: "🟥 Other fault shown"
+              next: capture_and_escalate
+            - label: "❓ No fault shown"
+              next: reboot_and_retry
 
-      end_success:
-        prompt: "Handshake successful and session started."
-        next: end
+        reboot_and_retry:
+          prompt: "Perform a controlled reboot and retry handshake."
+          actions:
+            - "Reboot HMI/controller"
+            - "If still failing: full power cycle per procedure"
+            - "Re-test with known-good EV"
+          next: end
+
+        capture_and_escalate:
+          prompt: "Capture the exact message/code and escalate."
+          actions:
+            - "Record error code/text, timestamp, and EV model"
+            - "Take photo of HMI fault screen"
+          next: end
+
+        suggest_interlock:
+          prompt: "Back out to General DC menu → select ⬛ **E-Stop / Interlock**."
+          next: end
+
+        suggest_isolation:
+          prompt: "Back out to General DC menu → select 🟪 **Insulation / Earth Fault**."
+          next: end
+
+        end_success:
+          prompt: "✅ Handshake successful and session started."
+          next: end
 
 
   - id: general_dc_insulation_earth_fault
@@ -419,6 +517,7 @@ faults:
       - "isolation fault"
       - "imd fault"
       - "rcd trip"
+      - "ground fault"
     triggers:
       any_text_contains:
         - "insulation"
@@ -429,56 +528,72 @@ faults:
         - "ground fault"
     severity: high
     tags: [safety, insulation, imd, moisture, cable]
-    start_node: safety_warning
-    nodes:
-      safety_warning:
-        prompt: "⚠️ Safety: insulation/earth faults can indicate dangerous leakage. Are you authorised and equipped to test safely?"
-        options:
-          "✅ Yes (authorised)": visual_moisture_check
-          "❌ No": stop_escalate
 
-      stop_escalate:
-        prompt: "Do not continue. Isolate the charger, tag out, and escalate to authorised personnel/OEM."
-        actions:
-          - "Apply LOTO and follow site procedure"
-          - "Capture fault code + timestamp"
-        next: end
+    response:
+      telegram_markdown: |
+        🧰 **Insulation / Earth Fault**
+        ⚠️ Treat as high-risk. Leakage faults can be dangerous.
 
-      visual_moisture_check:
-        prompt: "Any signs of moisture ingress, flooding, condensation, or damaged DC cable/connector?"
-        options:
-          "✅ Yes": dry_and_isolate
-          "❌ No": reproduce_and_isolate_pole
+        Tap **Start troubleshooting**.
 
-      dry_and_isolate:
-        prompt: "Moisture/damage suspected."
-        actions:
-          - "Take out of service; do not run repeated tests"
-          - "Dry external connector area if safe"
-          - "Inspect door seals, filters, vents, cable glands"
-          - "Document with photos"
-        next: end
+    decision_tree:
+      start_node: safety_warning
+      nodes:
 
-      reproduce_and_isolate_pole:
-        prompt: "Does the fault occur immediately on enable, or only after plugging in an EV?"
-        options:
-          "Immediately (no EV)": internal_leakage_suspect
-          "Only with EV connected": connector_or_ev_suspect
+        safety_warning:
+          prompt: "⚠️ Safety: insulation/earth faults can indicate dangerous leakage. Are you authorised and equipped to test safely?"
+          options:
+            - label: "✅ Yes (authorised)"
+              next: visual_moisture_check
+            - label: "❌ No"
+              next: stop_escalate
 
-      internal_leakage_suspect:
-        prompt: "Internal leakage suspected (IMD, HV components, moisture inside cabinet)."
-        actions:
-          - "Perform OEM-approved insulation checks only if authorised"
-          - "Escalate with IMD/isolation readings if available"
-        next: end
+        stop_escalate:
+          prompt: "Do not continue. Isolate the charger, tag out, and escalate to authorised personnel/OEM."
+          actions:
+            - "Apply LOTO and follow site procedure"
+            - "Capture fault code + timestamp"
+          next: end
 
-      connector_or_ev_suspect:
-        prompt: "Could be connector/cable contamination or vehicle issue."
-        actions:
-          - "Inspect and clean/dry connector externally (approved methods only)"
-          - "Try a different EV to rule out vehicle leakage"
-          - "If repeatable on multiple EVs: tag connector/cable for service"
-        next: end
+        visual_moisture_check:
+          prompt: "Any signs of moisture ingress, flooding, condensation, or damaged DC cable/connector?"
+          options:
+            - label: "✅ Yes"
+              next: dry_and_isolate
+            - label: "❌ No"
+              next: reproduce_and_isolate_pole
+
+        dry_and_isolate:
+          prompt: "Moisture/damage suspected."
+          actions:
+            - "Take out of service; do not run repeated tests"
+            - "Dry external connector area if safe"
+            - "Inspect door seals, filters, vents, cable glands"
+            - "Document with photos"
+          next: end
+
+        reproduce_and_isolate_pole:
+          prompt: "Does the fault occur immediately on enable, or only after plugging in an EV?"
+          options:
+            - label: "Immediately (no EV)"
+              next: internal_leakage_suspect
+            - label: "Only with EV connected"
+              next: connector_or_ev_suspect
+
+        internal_leakage_suspect:
+          prompt: "Internal leakage suspected (IMD, HV components, moisture inside cabinet)."
+          actions:
+            - "Perform OEM-approved insulation checks only if authorised"
+            - "Escalate with IMD/isolation readings if available"
+          next: end
+
+        connector_or_ev_suspect:
+          prompt: "Could be connector/cable contamination or vehicle issue."
+          actions:
+            - "Inspect and clean/dry connector externally (approved methods only)"
+            - "Try a different EV to rule out vehicle leakage"
+            - "If repeatable on multiple EVs: tag connector/cable for service"
+          next: end
 
 
   - id: general_dc_overtemp_cooling_fault
@@ -492,6 +607,7 @@ faults:
       - "fan fault"
       - "pump fault"
       - "thermal fault"
+      - "temperature high"
     triggers:
       any_text_contains:
         - "overtemp"
@@ -503,44 +619,58 @@ faults:
         - "temperature high"
     severity: high
     tags: [thermal, cooling, fan, pump, filter]
-    start_node: check_airflow
-    nodes:
-      check_airflow:
-        prompt: "Is airflow/cooling obviously compromised (blocked vents, clogged filters, hot cabinet, fans not running)?"
-        options:
-          "✅ Yes": restore_airflow
-          "❌ No / unsure": read_temps
 
-      restore_airflow:
-        prompt: "Restore airflow where safe."
-        actions:
-          - "Clear obstructions around vents"
-          - "Inspect/clean filters (if accessible)"
-          - "Check fan operation (audible/visible)"
-          - "If liquid cooled: check for leaks and coolant level (visual)"
-        next: cooldown_retry
+    response:
+      telegram_markdown: |
+        🧰 **Overtemperature / Cooling Fault**
+        Use this when thermal warnings, fan/pump faults, or cooling alarms are present.
 
-      read_temps:
-        prompt: "Do you have temperature readouts or a specific thermal sensor fault shown?"
-        options:
-          "✅ Yes": sensor_targeted_checks
-          "❌ No": cooldown_retry
+        Tap **Start troubleshooting**.
 
-      sensor_targeted_checks:
-        prompt: "Target likely cause based on fault."
-        actions:
-          - "If 'fan' fault: verify fan spins, wiring not loose (visual)"
-          - "If 'pump' fault: listen/feel for pump operation (if accessible)"
-          - "If 'sensor' fault: likely sensor/cable issue—escalate for parts"
-        next: cooldown_retry
+    decision_tree:
+      start_node: check_airflow
+      nodes:
 
-      cooldown_retry:
-        prompt: "Allow cooldown and retry session."
-        actions:
-          - "Wait 10–20 minutes depending on conditions"
-          - "Reboot controller if permitted"
-          - "Re-test charging"
-        next: end
+        check_airflow:
+          prompt: "Is airflow/cooling obviously compromised (blocked vents, clogged filters, hot cabinet, fans not running)?"
+          options:
+            - label: "✅ Yes"
+              next: restore_airflow
+            - label: "❌ No / unsure"
+              next: read_temps
+
+        restore_airflow:
+          prompt: "Restore airflow where safe."
+          actions:
+            - "Clear obstructions around vents"
+            - "Inspect/clean filters (if accessible)"
+            - "Check fan operation (audible/visible)"
+            - "If liquid cooled: check for leaks and coolant level (visual)"
+          next: cooldown_retry
+
+        read_temps:
+          prompt: "Do you have temperature readouts or a specific thermal sensor fault shown?"
+          options:
+            - label: "✅ Yes"
+              next: sensor_targeted_checks
+            - label: "❌ No"
+              next: cooldown_retry
+
+        sensor_targeted_checks:
+          prompt: "Target likely cause based on fault."
+          actions:
+            - "If 'fan' fault: verify fan spins, wiring not loose (visual)"
+            - "If 'pump' fault: listen/feel for pump operation (if accessible)"
+            - "If 'sensor' fault: likely sensor/cable issue—capture evidence and escalate for parts"
+          next: cooldown_retry
+
+        cooldown_retry:
+          prompt: "Allow cooldown and retry session."
+          actions:
+            - "Wait 10–20 minutes depending on conditions"
+            - "Reboot controller if permitted"
+            - "Re-test charging"
+          next: end
 
 
   - id: general_dc_estop_interlock_active
@@ -549,6 +679,7 @@ faults:
     title: "Emergency Stop / Safety Interlock Active"
     aliases:
       - "e-stop"
+      - "estop"
       - "emergency stop"
       - "interlock open"
       - "door open"
@@ -565,72 +696,89 @@ faults:
         - "hvil"
     severity: high
     tags: [safety, interlock, estop, hvil]
-    start_node: identify_interlock
-    nodes:
-      identify_interlock:
-        prompt: "What is indicated?"
-        options:
-          "🟥 Emergency stop pressed": reset_estop
-          "🚪 Door/cabinet open": close_doors
-          "🔥 Site/fire interlock": site_interlock
-          "🔌 HVIL / connector interlock": hvil_checks
-          "❓ Not sure": generic_interlock
 
-      reset_estop:
-        prompt: "Reset E-stop(s) and re-check status."
-        actions:
-          - "Check all E-stops (including remote or pedestal E-stops)"
-          - "Twist/pull reset as per device"
-        next: recheck_ready
+    response:
+      telegram_markdown: |
+        🧰 **Emergency Stop / Safety Interlock Active**
+        Use when E-Stop pressed, door open, HVIL open, or safety loop fault.
 
-      close_doors:
-        prompt: "Ensure all cabinet doors/panels are properly closed and latched."
-        actions:
-          - "Inspect door switches if visible"
-          - "Confirm no tools/cables obstructing closure"
-        next: recheck_ready
+        Tap **Start troubleshooting**.
 
-      site_interlock:
-        prompt: "Site interlock active (e.g., fire alarm)."
-        actions:
-          - "Confirm site safety system is reset/cleared"
-          - "Coordinate with site contact if required"
-          - "Do not bypass safety circuits"
-        next: recheck_ready
+    decision_tree:
+      start_node: identify_interlock
+      nodes:
 
-      hvil_checks:
-        prompt: "HVIL/interlock related to connector/cable."
-        actions:
-          - "Inspect connector latch and cable strain relief"
-          - "Try alternate connector if available"
-          - "If repeatable: tag connector/cable for service"
-        next: recheck_ready
+        identify_interlock:
+          prompt: "What is indicated?"
+          options:
+            - label: "🟥 Emergency stop pressed"
+              next: reset_estop
+            - label: "🚪 Door/cabinet open"
+              next: close_doors
+            - label: "🔥 Site/fire interlock"
+              next: site_interlock
+            - label: "🔌 HVIL / connector interlock"
+              next: hvil_checks
+            - label: "❓ Not sure"
+              next: generic_interlock
 
-      generic_interlock:
-        prompt: "General interlock troubleshooting."
-        actions:
-          - "Check HMI messages carefully for which loop is open"
-          - "Power cycle after clearing interlock"
-          - "Escalate if interlock does not clear"
-        next: recheck_ready
+        reset_estop:
+          prompt: "Reset E-stop(s) and re-check status."
+          actions:
+            - "Check all E-stops (including remote/pedestal E-stops)"
+            - "Twist/pull reset as per device"
+          next: recheck_ready
 
-      recheck_ready:
-        prompt: "Is the charger now 'Ready' and faults cleared?"
-        options:
-          "✅ Yes": end_success
-          "❌ No": escalate_with_details
+        close_doors:
+          prompt: "Ensure all cabinet doors/panels are properly closed and latched."
+          actions:
+            - "Inspect door switches if visible"
+            - "Confirm no tools/cables obstructing closure"
+          next: recheck_ready
 
-      escalate_with_details:
-        prompt: "Escalate with evidence."
-        actions:
-          - "Capture exact message/code and timestamp"
-          - "Photo of HMI alarm screen"
-          - "Note which resets attempted"
-        next: end
+        site_interlock:
+          prompt: "Site interlock active (e.g., fire alarm)."
+          actions:
+            - "Confirm site safety system is reset/cleared"
+            - "Coordinate with site contact if required"
+            - "Do not bypass safety circuits"
+          next: recheck_ready
 
-      end_success:
-        prompt: "Interlock cleared and charger ready."
-        next: end
+        hvil_checks:
+          prompt: "HVIL/interlock related to connector/cable."
+          actions:
+            - "Inspect connector latch and cable strain relief"
+            - "Try alternate connector if available"
+            - "If repeatable: tag connector/cable for service"
+          next: recheck_ready
+
+        generic_interlock:
+          prompt: "General interlock troubleshooting."
+          actions:
+            - "Check HMI messages carefully for which loop is open"
+            - "Power cycle after clearing interlock"
+            - "Escalate if interlock does not clear"
+          next: recheck_ready
+
+        recheck_ready:
+          prompt: "Is the charger now 'Ready' and faults cleared?"
+          options:
+            - label: "✅ Yes"
+              next: end_success
+            - label: "❌ No"
+              next: escalate_with_details
+
+        escalate_with_details:
+          prompt: "Escalate with evidence."
+          actions:
+            - "Capture exact message/code and timestamp"
+            - "Photo of HMI alarm screen"
+            - "Note which resets attempted"
+          next: end
+
+        end_success:
+          prompt: "✅ Interlock cleared and charger ready."
+          next: end
 
 
   - id: general_dc_power_derating_low_power
@@ -653,67 +801,85 @@ faults:
         - "limited power"
     severity: medium
     tags: [performance, derating, thermal, grid, load_management]
-    start_node: confirm_expectations
-    nodes:
-      confirm_expectations:
-        prompt: "Confirm expectations: is the vehicle requesting high power (SOC low, warm battery) and stall rating supports it?"
-        options:
-          "✅ Yes": check_site_limits
-          "❌ Not sure": explain_vehicle_limits
 
-      explain_vehicle_limits:
-        prompt: "Slow charge can be normal due to EV limits."
-        actions:
-          - "High SOC reduces requested power significantly"
-          - "Cold battery limits power until warmed"
-          - "Different EV models have different max kW"
-        next: check_site_limits
+    response:
+      telegram_markdown: |
+        🧰 **Low Power / Derating (Charging but Slow)**
+        Use when charging starts, but kW is consistently low.
 
-      check_site_limits:
-        prompt: "Any site limits active (load management, shared power, demand response)?"
-        options:
-          "✅ Yes / likely": document_site_limits
-          "❌ No": check_thermal_derate
+        Tap **Start troubleshooting**.
 
-      document_site_limits:
-        prompt: "Document and confirm site-side limits."
-        actions:
-          - "Check if multiple stalls share a power cabinet"
-          - "Confirm other dispensers are active"
-          - "Ask site/client about demand limits"
-        next: check_thermal_derate
+    decision_tree:
+      start_node: confirm_expectations
+      nodes:
 
-      check_thermal_derate:
-        prompt: "Any overtemp/cooling warnings or hot ambient conditions?"
-        options:
-          "✅ Yes": goto_overtemp_fault
-          "❌ No": check_ac_supply_quality
+        confirm_expectations:
+          prompt: "Confirm expectations: is the EV requesting high power (SOC low, warm battery) and the stall rating supports it?"
+          options:
+            - label: "✅ Yes"
+              next: check_site_limits
+            - label: "❌ Not sure"
+              next: explain_vehicle_limits
 
-      check_ac_supply_quality:
-        prompt: "AC supply quality issues can reduce output (phase imbalance/undervoltage). Any supply alarms?"
-        options:
-          "✅ Yes": supply_quality_actions
-          "❌ No": capture_and_escalate
+        explain_vehicle_limits:
+          prompt: "Slow charging can be normal due to EV limits."
+          actions:
+            - "High SOC reduces requested power significantly"
+            - "Cold battery limits power until warmed"
+            - "Different EV models have different max kW"
+          next: check_site_limits
 
-      supply_quality_actions:
-        prompt: "Supply quality actions (safe checks)."
-        actions:
-          - "Check for phase loss/undervoltage alarms on HMI"
-          - "If authorised: verify voltages at incomer"
-          - "Escalate to site electrician if supply abnormal"
-        next: end
+        check_site_limits:
+          prompt: "Any site limits active (load management, shared power, demand response)?"
+          options:
+            - label: "✅ Yes / likely"
+              next: document_site_limits
+            - label: "❌ No"
+              next: check_thermal_derate
 
-      capture_and_escalate:
-        prompt: "If no obvious cause, capture evidence for OEM/backend."
-        actions:
-          - "Record delivered kW, EV model, SOC, ambient temp"
-          - "Photo of HMI session screen"
-          - "Timestamp + charger ID"
-        next: end
+        document_site_limits:
+          prompt: "Document and confirm site-side limits."
+          actions:
+            - "Check if multiple stalls share a power cabinet"
+            - "Confirm other dispensers are active"
+            - "Ask site/client about demand limits"
+          next: check_thermal_derate
 
-      goto_overtemp_fault:
-        prompt: "Go to: 'Overtemperature / Cooling Fault' fault pack item."
-        next: end
+        check_thermal_derate:
+          prompt: "Any overtemp/cooling warnings or hot ambient conditions?"
+          options:
+            - label: "✅ Yes"
+              next: suggest_overtemp
+            - label: "❌ No"
+              next: check_ac_supply_quality
+
+        check_ac_supply_quality:
+          prompt: "AC supply quality can reduce output (phase imbalance/undervoltage). Any supply alarms?"
+          options:
+            - label: "✅ Yes"
+              next: supply_quality_actions
+            - label: "❌ No"
+              next: capture_and_escalate
+
+        supply_quality_actions:
+          prompt: "Supply quality actions (safe checks)."
+          actions:
+            - "Check for phase loss/undervoltage alarms on HMI"
+            - "If authorised: verify voltages at incomer"
+            - "Escalate to site electrician if supply abnormal"
+          next: end
+
+        capture_and_escalate:
+          prompt: "If no obvious cause, capture evidence for OEM/backend."
+          actions:
+            - "Record delivered kW, EV model, SOC, ambient temp"
+            - "Photo of HMI session screen"
+            - "Timestamp + charger ID"
+          next: end
+
+        suggest_overtemp:
+          prompt: "Back out to General DC menu → select 🟫 **Overtemp / Cooling**."
+          next: end
 
 
   - id: general_dc_hmi_frozen_unresponsive
@@ -735,25 +901,70 @@ faults:
         - "hmi"
     severity: medium
     tags: [hmi, ui, controller, reboot]
-    start_node: check_active_session
-    nodes:
-      check_active_session:
-        prompt: "Is there an active charging session in progress?"
-        options:
-          "✅ Yes": avoid_interrupting_session
-          "❌ No": reboot_hmi
 
-      avoid_interrupting_session:
-        prompt: "Avoid interrupting an active session unless required for safety."
-        actions:
-          - "If session is charging OK: monitor until complete"
-          - "If user-impact is critical: follow site procedure to end session safely"
-        next: end
+    response:
+      telegram_markdown: |
+        🧰 **HMI Frozen / Unresponsive**
+        Screen is on, but UI is stuck/unresponsive.
 
-      reboot_hmi:
-        prompt: "Try a controlled HMI reboot first (if menu/button available)."
-        actions:
-          - "Use service menu reboot if available"
-          - "If no UI access: full power cycle per procedure"
-          - "Check for recurring freezes (may indicate storage/OS issues)"
-        next: end
+        Tap **Start troubleshooting**.
+
+    decision_tree:
+      start_node: check_active_session
+      nodes:
+
+        check_active_session:
+          prompt: "Is there an active charging session in progress?"
+          options:
+            - label: "✅ Yes"
+              next: avoid_interrupting_session
+            - label: "❌ No"
+              next: reboot_hmi
+
+        avoid_interrupting_session:
+          prompt: "Avoid interrupting an active session unless required for safety."
+          actions:
+            - "If session is charging OK: monitor until complete"
+            - "If user impact is critical: follow site procedure to end session safely"
+          next: end
+
+        reboot_hmi:
+          prompt: "Try a controlled HMI reboot first (if menu/button available)."
+          actions:
+            - "Use service menu reboot if available"
+            - "If no UI access: full power cycle per procedure"
+            - "If recurring: capture evidence (photo/video) and escalate (possible storage/OS issue)"
+          next: end
+
+
+  # --------------------
+  # Shared end nodes
+  # --------------------
+  - id: general_dc__shared_nodes
+    platform: general_dc
+    charger_type: dc
+    title: "Shared Nodes (internal)"
+    aliases: []
+    triggers: {}
+    severity: low
+    tags: [internal]
+
+    response:
+      telegram_markdown: |
+        (internal)
+
+    decision_tree:
+      start_node: end
+      nodes:
+
+        end_success:
+          prompt: "✅ Outcome: issue resolved / charging restored."
+          next: end
+
+        end:
+          prompt: "✅ End of flow.\n\nIf unresolved:\n• Capture error code/text + timestamp\n• Take photos of HMI fault screen\n• Note actions taken\n\nUse **Create report for this fault** to document the job."
+          options:
+            - label: "🏠 Back to General DC menu"
+              next: "__MENU_GENERAL_DC__"
+            - label: "⬅️ Back"
+              next: "__MENU_GENERAL_DC__"
