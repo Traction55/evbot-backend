@@ -1,10 +1,11 @@
 /**
  * EVBot backend (Express + YAML fault library + Telegram bot)
  * - Works locally (polling) and on Railway (webhook)
- * - Manufacturer menu first (Autel + Kempower + Tritium)
+ * - Manufacturer menu first (General DC + Autel + Kempower + Tritium)
  * - Autel faults (YAML) + YAML decision_tree
  * - Kempower faults (YAML) + YAML decision_tree
  * - Tritium faults (YAML) + YAML decision_tree
+ * - General DC faults (YAML) + YAML decision_tree  ✅ NEW
  * - /report generates a client-ready service report
  *
  * New additions (Jan 2026):
@@ -108,6 +109,7 @@ const FAULTS_DIR = path.join(__dirname, "..", "faults");
 const AUTEL_FILE = path.join(FAULTS_DIR, "autel.yml");
 const KEMPOWER_FILE = path.join(FAULTS_DIR, "kempower.yml");
 const TRITIUM_FILE = path.join(FAULTS_DIR, "tritium.yml");
+const GENERAL_DC_FILE = path.join(FAULTS_DIR, "general_dc.yml"); // ✅ NEW
 
 function loadYamlSafe(file) {
   try {
@@ -157,7 +159,21 @@ function loadTritium() {
   return normalizeFaultPack(loadYamlSafe(TRITIUM_FILE));
 }
 
+function loadGeneralDc() {
+  if (!fs.existsSync(GENERAL_DC_FILE)) {
+    console.error(`❌ Missing general_dc.yml at: ${GENERAL_DC_FILE}`);
+    return { faults: [] };
+  }
+  return normalizeFaultPack(loadYamlSafe(GENERAL_DC_FILE));
+}
+
 // Boot log (shows in Railway Deploy Logs)
+try {
+  const bootGen = loadGeneralDc();
+  console.log(`✅ General DC file path: ${GENERAL_DC_FILE}`);
+  console.log(`✅ General DC faults loaded: ${bootGen.faults.length}`);
+} catch (_) {}
+
 try {
   const bootAutel = loadAutel();
   console.log(`✅ Autel file path: ${AUTEL_FILE}`);
@@ -218,6 +234,16 @@ app.get("/health", (req, res) =>
 );
 
 // Debug endpoints
+app.get("/debug/general_dc", (req, res) => {
+  const data = loadGeneralDc();
+  res.json({
+    file: GENERAL_DC_FILE,
+    exists: fs.existsSync(GENERAL_DC_FILE),
+    count: data.faults.length,
+    titles: data.faults.slice(0, 30).map((f) => f.title),
+  });
+});
+
 app.get("/debug/autel", (req, res) => {
   const data = loadAutel();
   res.json({
@@ -346,6 +372,16 @@ async function upsertPhotoOrText(chatId, opts) {
    REPORT CHECKLIST (MFR + FAULT AWARE)
    ========================= */
 const REPORT_CHECKLIST = {
+  general_dc: {
+    base: [
+      { key: "g_loto", label: "🔒 LOTO / isolation applied" },
+      { key: "g_visual", label: "👀 Visual inspection (burn marks, water ingress, loose lugs)" },
+      { key: "g_power_cycle", label: "🔁 Controlled power cycle performed" },
+      { key: "g_logs", label: "🗂️ Alarms/logs reviewed + timestamps captured" },
+      { key: "g_comms", label: "📶 Comms checked (LTE/Ethernet, signal, link lights)" },
+    ],
+  },
+
   kempower: {
     base: [
       { key: "k_loto", label: "🔒 LOTO / isolation applied" },
@@ -414,6 +450,7 @@ function actionSignature(label) {
   if (/(power cycle|reboot|restart)/i.test(t)) return "power_cycle";
   if (/(firmware|version|update)/i.test(t)) return "firmware";
   if (/(logs|alarms|timestamps|event log)/i.test(t)) return "logs";
+  if (/(comms|ocpp|lte|ethernet|sim|apn|network)/i.test(t)) return "comms";
 
   return t;
 }
@@ -466,7 +503,7 @@ function buildReportActionOptions({ manufacturer, faultId, yamlActions }) {
 const reportState = new Map();
 
 // ✅ Decision-tree state with HISTORY
-// chatId -> { pack: "autel"|"kempower"|"tritium", faultId: string, history: string[] }
+// chatId -> { pack: "general_dc"|"autel"|"kempower"|"tritium", faultId: string, history: string[] }
 const dtState = new Map();
 
 /* =========================
@@ -480,11 +517,11 @@ function dtBackCallback(pack, faultId) {
 }
 
 /**
- * ✅ FIX: Kempower showing Autel faults happened because pack routing was ambiguous.
- * This function is the single source of truth for mapping pack -> loader.
+ * ✅ Single source of truth for mapping pack -> loader.
  */
 function loadPackByName(pack) {
   const p = String(pack || "").toLowerCase();
+  if (p === "general_dc") return loadGeneralDc();
   if (p === "kempower") return loadKempower();
   if (p === "tritium") return loadTritium();
   return loadAutel();
@@ -590,9 +627,10 @@ function reportFromFaultCallback(pack, faultId) {
 }
 
 /**
- * ✅ FIX: standardize menu callbacks so we never collide with fault-card callbacks.
+ * ✅ standardize menu callbacks so we never collide with fault-card callbacks.
  */
 function packMenuCallback(pack) {
+  if (pack === "general_dc") return "general_dc:menu";
   if (pack === "kempower") return "kempower:menu";
   if (pack === "tritium") return "tritium:menu";
   return "autel:menu";
@@ -670,6 +708,8 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   const tree = fault?.decision_tree;
   const node = tree?.nodes?.[nodeId];
 
+  // menu-jump nodes if you ever reference them
+  if (nodeId === "__MENU_GENERAL_DC__") return showGeneralDcMenu(chatId, messageId);
   if (nodeId === "__MENU_KEMPOWER__") return showKempowerMenu(chatId, messageId);
   if (nodeId === "__MENU_AUTEL__") return showAutelMenu(chatId, messageId);
   if (nodeId === "__MENU_TRITIUM__") return showTritiumMenu(chatId, messageId);
@@ -699,7 +739,10 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   ]);
 
   rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(pack, fault.id) }]);
-  rows.push([{ text: `🏠 ${cap(pack)} menu`, callback_data: packMenuCallback(pack) }]);
+
+  // nicer label for general_dc
+  const menuLabel = pack === "general_dc" ? "🏠 General DC menu" : `🏠 ${cap(pack)} menu`;
+  rows.push([{ text: menuLabel, callback_data: packMenuCallback(pack) }]);
 
   const imageUrl = node.image ? imageKeyToUrl(node.image) : "";
 
@@ -870,10 +913,12 @@ async function startReportFromFault(chatId, pack, fault) {
     },
   });
 
+  const packLabel = pack === "general_dc" ? "General DC" : cap(pack);
+
   return bot.sendMessage(
     chatId,
     `🧾 <b>Report Builder</b>\n\nPrefilled:\n<b>Manufacturer:</b> ${escapeHtml(
-      cap(pack)
+      packLabel
     )}\n<b>Fault:</b> ${escapeHtml(fault?.title || "")}\n\nWhat is the <b>site name</b>?\n\n(Reply with text)`,
     { parse_mode: "HTML" }
   );
@@ -916,6 +961,7 @@ async function askReportManufacturer(chatId) {
   setReport(chatId, { step: "mfr" });
 
   const rows = [
+    [{ text: "🧰 General DC", callback_data: "r:mfr:general_dc" }],
     [{ text: "🔵 Autel", callback_data: "r:mfr:autel" }],
     [{ text: "🟢 Kempower", callback_data: "r:mfr:kempower" }],
     [{ text: "🔺 Tritium", callback_data: "r:mfr:tritium" }],
@@ -932,7 +978,7 @@ async function askFault(chatId) {
   setReport(chatId, { step: "fault" });
 
   const st = reportState.get(chatId);
-  const pack = String(st?.data?.manufacturer || "autel").toLowerCase();
+  const pack = String(st?.data?.manufacturer || "general_dc").toLowerCase();
 
   const data = loadPackByName(pack);
   const faults = data.faults || [];
@@ -942,20 +988,22 @@ async function askFault(chatId) {
   if (!faults.length) {
     rows.push([
       {
-        text: `⚠️ No ${cap(pack)} faults loaded (check /debug/${pack})`,
+        text: `⚠️ No ${pack === "general_dc" ? "General DC" : cap(pack)} faults loaded (check /debug/${pack})`,
         callback_data: "noop",
       },
     ]);
   } else {
+    const prefix = pack.toUpperCase(); // GENERAL_DC / AUTEL / KEMPOWER / TRITIUM
     faults.forEach((f) => {
-      rows.push([{ text: f.title, callback_data: `r:fault:${pack.toUpperCase()}:${f.id}` }]);
+      rows.push([{ text: f.title, callback_data: `r:fault:${prefix}:${f.id}` }]);
     });
   }
 
   rows.push([{ text: "⬅️ Back", callback_data: "r:back:mfr" }]);
   rows.push([{ text: "Cancel", callback_data: "r:cancel" }]);
 
-  return bot.sendMessage(chatId, `Select the <b>${escapeHtml(cap(pack))} fault</b>:`, {
+  const packLabel = pack === "general_dc" ? "General DC fault" : `${escapeHtml(cap(pack))} fault`;
+  return bot.sendMessage(chatId, `Select the <b>${packLabel}</b>:`, {
     parse_mode: "HTML",
     reply_markup: { inline_keyboard: rows },
   });
@@ -999,7 +1047,10 @@ async function askActions(chatId) {
   const actionOptions = st?.data?.actionOptions || [];
 
   const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
-  const mfr = st?.data?.manufacturer ? `\n<b>Manufacturer:</b> ${escapeHtml(cap(st.data.manufacturer))}` : "";
+  const mfr =
+    st?.data?.manufacturer
+      ? `\n<b>Manufacturer:</b> ${escapeHtml(st.data.manufacturer === "general_dc" ? "General DC" : cap(st.data.manufacturer))}`
+      : "";
 
   return bot.sendMessage(chatId, `Select <b>actions performed</b>:${mfr}${title}`, {
     parse_mode: "HTML",
@@ -1078,10 +1129,13 @@ async function finishReport(chatId) {
 /* =========================
    MENUS
    ========================= */
+
 function showManufacturerMenu(chatId, messageId) {
   resetDt(chatId);
 
+  // ✅ GENERAL DC MUST BE AT THE TOP
   const rows = [
+    [{ text: "🧰 General DC (All Brands)", callback_data: "mfr:general_dc" }],
     [{ text: "🔵 Autel", callback_data: "mfr:autel" }],
     [{ text: "🟢 Kempower", callback_data: "mfr:kempower" }],
     [{ text: "🔺 Tritium", callback_data: "mfr:tritium" }],
@@ -1104,9 +1158,9 @@ function buildPackMenuKeyboard(pack) {
   const rows = [];
 
   if (!faults.length) {
-    rows.push([{ text: `⚠️ No ${cap(pack)} faults loaded (check /debug/${pack})`, callback_data: "noop" }]);
+    rows.push([{ text: `⚠️ No ${pack === "general_dc" ? "General DC" : cap(pack)} faults loaded (check /debug/${pack})`, callback_data: "noop" }]);
   } else {
-    const prefix = pack.toUpperCase(); // AUTEL / KEMPOWER / TRITIUM
+    const prefix = pack.toUpperCase(); // GENERAL_DC / AUTEL / KEMPOWER / TRITIUM
     faults.forEach((f) => rows.push([{ text: f.title, callback_data: `${prefix}:${f.id}` }]));
   }
 
@@ -1115,6 +1169,48 @@ function buildPackMenuKeyboard(pack) {
   rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
 
   return rows;
+}
+
+/**
+ * ✅ General DC quick-picks (fast menu)
+ * These IDs match the YAML we created.
+ */
+function buildGeneralDcQuickKeyboard() {
+  const rows = [
+    [{ text: "🟥 Will Not Power On", callback_data: "GENERAL_DC:general_dc_will_not_power_on" }],
+    [{ text: "🟧 Won’t Start Charge", callback_data: "GENERAL_DC:general_dc_powers_on_wont_start_charge" }],
+    [{ text: "🟨 Offline / Comms", callback_data: "GENERAL_DC:general_dc_offline_backend_comms" }],
+    [{ text: "🟦 Handshake Failure", callback_data: "GENERAL_DC:general_dc_vehicle_handshake_failure" }],
+    [{ text: "🟪 Insulation / Earth Fault", callback_data: "GENERAL_DC:general_dc_insulation_earth_fault" }],
+    [{ text: "🟫 Overtemp / Cooling", callback_data: "GENERAL_DC:general_dc_overtemp_cooling_fault" }],
+    [{ text: "⬛ E-Stop / Interlock", callback_data: "GENERAL_DC:general_dc_estop_interlock_active" }],
+    [{ text: "🟠 Low Power / Derating", callback_data: "GENERAL_DC:general_dc_power_derating_low_power" }],
+    [{ text: "🖥️ HMI Frozen", callback_data: "GENERAL_DC:general_dc_hmi_frozen_unresponsive" }],
+    [{ text: "📋 View all General DC faults", callback_data: "general_dc:all" }],
+    [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
+    [{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }],
+    [{ text: "🔁 Reset", callback_data: "reset" }],
+  ];
+
+  return rows;
+}
+
+async function showGeneralDcMenu(chatId, messageId) {
+  return upsertMessage(chatId, {
+    messageId,
+    text: "🧰 <b>General DC (All Brands)</b>\n\nSelect the issue category:",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: buildGeneralDcQuickKeyboard() },
+  });
+}
+
+async function showGeneralDcAllMenu(chatId, messageId) {
+  return upsertMessage(chatId, {
+    messageId,
+    text: "🧰 <b>General DC (All Brands)</b>\n\nChoose a General DC fault:",
+    parse_mode: "HTML",
+    reply_markup: { inline_keyboard: buildPackMenuKeyboard("general_dc") },
+  });
 }
 
 async function showAutelMenu(chatId, messageId) {
@@ -1164,6 +1260,11 @@ bot.onText(/^\/reset$/, async (msg) => {
   resetDt(chatId);
   await showManufacturerMenu(chatId);
   await bot.sendMessage(chatId, "🔄 Reset complete.");
+});
+
+bot.onText(/^\/general_dc$/, async (msg) => {
+  resetDt(msg.chat.id);
+  await showGeneralDcMenu(msg.chat.id);
 });
 
 bot.onText(/^\/autel$/, async (msg) => {
@@ -1295,8 +1396,16 @@ bot.on("callback_query", async (q) => {
     return showManufacturerMenu(chatId, messageId);
   }
 
+  // Quick route: General DC "all faults" list
+  if (data === "general_dc:all") {
+    clearReport(chatId);
+    resetDt(chatId);
+    return showGeneralDcAllMenu(chatId, messageId);
+  }
+
   if (data.startsWith("mfr:")) {
     const mfr = data.split(":")[1];
+    if (mfr === "general_dc") return showGeneralDcMenu(chatId, messageId);
     if (mfr === "autel") return showAutelMenu(chatId, messageId);
     if (mfr === "kempower") return showKempowerMenu(chatId, messageId);
     if (mfr === "tritium") return showTritiumMenu(chatId, messageId);
@@ -1307,6 +1416,7 @@ bot.on("callback_query", async (q) => {
   if (data.endsWith(":menu")) {
     const pack = data.split(":")[0].toLowerCase();
     resetDt(chatId);
+    if (pack === "general_dc") return showGeneralDcMenu(chatId, messageId);
     if (pack === "kempower") return showKempowerMenu(chatId, messageId);
     if (pack === "tritium") return showTritiumMenu(chatId, messageId);
     return showAutelMenu(chatId, messageId);
@@ -1325,6 +1435,7 @@ bot.on("callback_query", async (q) => {
     const fault = getFaultById(pack, faultId);
     if (!fault) {
       resetDt(chatId);
+      if (pack === "general_dc") return showGeneralDcMenu(chatId, messageId);
       return pack === "kempower"
         ? showKempowerMenu(chatId, messageId)
         : pack === "tritium"
@@ -1398,7 +1509,14 @@ bot.on("callback_query", async (q) => {
     const type = parts[2];
     const id = parts[3];
 
-    const pack = type === "KEMPOWER" ? "kempower" : type === "TRITIUM" ? "tritium" : "autel";
+    const pack =
+      type === "GENERAL_DC"
+        ? "general_dc"
+        : type === "KEMPOWER"
+        ? "kempower"
+        : type === "TRITIUM"
+        ? "tritium"
+        : "autel";
 
     const f = getFaultById(pack, id);
     const t = getReportTemplateFromFault(f) || defaultReportTemplate();
@@ -1413,7 +1531,7 @@ bot.on("callback_query", async (q) => {
       data: {
         manufacturer: pack,
         faultId: String(id),
-        faultTitle: f ? f.title : `${cap(pack)} Fault (${id})`,
+        faultTitle: f ? f.title : `${pack === "general_dc" ? "General DC" : cap(pack)} Fault (${id})`,
         faultSummary: String(t.summary || "").trim(),
         actionOptions: actionOptionsBuilt,
         actions: [],
@@ -1444,7 +1562,10 @@ bot.on("callback_query", async (q) => {
     setReport(chatId, { data: { actions: Array.from(selected) } });
 
     const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
-    const mfr = st?.data?.manufacturer ? `\n<b>Manufacturer:</b> ${escapeHtml(cap(st.data.manufacturer))}` : "";
+    const mfr =
+      st?.data?.manufacturer
+        ? `\n<b>Manufacturer:</b> ${escapeHtml(st.data.manufacturer === "general_dc" ? "General DC" : cap(st.data.manufacturer))}`
+        : "";
 
     return upsertMessage(chatId, {
       messageId,
@@ -1470,6 +1591,21 @@ bot.on("callback_query", async (q) => {
   }
 
   // ------------------- FAULT SELECTION (STRICT PACK ROUTING) -------------------
+  if (data.startsWith("GENERAL_DC:")) {
+    const id = data.split(":")[1];
+    const fault = getFaultById("general_dc", id);
+    if (!fault) {
+      resetDt(chatId);
+      return upsertMessage(chatId, {
+        messageId,
+        text: "Fault not found.",
+        parse_mode: "HTML",
+        reply_markup: { inline_keyboard: [[{ text: "⬅️ Back", callback_data: "general_dc:menu" }]] },
+      });
+    }
+    return showFaultCard({ chatId, messageId, pack: "general_dc", fault });
+  }
+
   if (data.startsWith("AUTEL:")) {
     const id = data.split(":")[1];
     const fault = getFaultById("autel", id);
