@@ -1156,8 +1156,7 @@ function buildPackMenuKeyboard(pack) {
  * These IDs match the YAML we created.
  */
 function buildGeneralDcQuickKeyboard() {
-function buildGeneralDcQuickKeyboard() {
-  const rows = [
+  return [
     [{ text: "🟥 Will Not Power On", callback_data: "GENERAL_DC:general_dc_will_not_power_on" }],
     [{ text: "🟧 Won’t Start Charge", callback_data: "GENERAL_DC:general_dc_powers_on_wont_start_charge" }],
     [{ text: "🟨 Offline / Comms", callback_data: "GENERAL_DC:general_dc_offline_backend_comms" }],
@@ -1173,18 +1172,16 @@ function buildGeneralDcQuickKeyboard() {
     [{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }],
     [{ text: "🔁 Reset", callback_data: "reset" }],
   ];
-
-  return rows;
-}
-
 }
 
 async function showGeneralDcMenu(chatId, messageId) {
+  resetDt(chatId);
+
   return upsertMessage(chatId, {
     messageId,
     text: "🧰 <b>General DC (All Brands)</b>\n\nSelect the issue category:",
     parse_mode: "HTML",
-    reply_markup: { inline_keyboard: buildGeneralDcQuickKeyboard() },
+    reply_markup: kb(buildGeneralDcQuickKeyboard()),
   });
 }
 
