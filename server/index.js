@@ -8,22 +8,10 @@
  * - General DC faults (YAML) + YAML decision_tree  ✅ NEW
  * - /report generates a client-ready service report
  *
- * New additions (Jan 2026):
- * - "Create report for this fault" from any fault card (autofills manufacturer + fault)
- * - Removed visible "evidence captured" checklist (per request)
- * - Added optional "Upload photos" step (silent capture, referenced as attachments count)
- * - Report fields:
- *     • Site name
- *     • Charger ID (public/billing)
- *     • Charger Serial Number (S/N)
- *     • Asset ID (internal)
- *     • Tech name
- *     • Client reference / ticket #
- *
- * New additions (Images):
- * - Serves static images from /images -> assets/images
- * - YAML decision_tree node can include: image: autel/ac_contactor_location
- *   and bot will sendPhoto(PUBLIC_URL/images/autel/ac_contactor_location.png)
+ * ✅ FIX (Jan 2026):
+ * - Prevent Railway crash: TelegramError 400 BUTTON_DATA_INVALID
+ * - Decision-tree callback_data is now tiny: dt:start / dt:o:0 / dt:bk / dt:mn
+ *   (No pack/fault/node strings inside callback_data)
  *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
@@ -483,12 +471,6 @@ function getFaultAddonLabels(faultId) {
 
 /**
  * Build the actionOptions list used by the report wizard.
- * Priority order:
- * 1) Manufacturer base checklist
- * 2) Fault addons (by faultId)
- * 3) YAML report_template.actions (appended)
- * 4) Smart-dedupe overlaps (by "meaning bucket")
- * 5) If all empty -> fallback REPORT_ACTION_OPTIONS
  */
 function buildReportActionOptions({ manufacturer, faultId, yamlActions }) {
   const mfBase = getManufacturerChecklistLabels(manufacturer);
@@ -502,19 +484,51 @@ function buildReportActionOptions({ manufacturer, faultId, yamlActions }) {
    ========================= */
 const reportState = new Map();
 
-// ✅ Decision-tree state with HISTORY
-// chatId -> { pack: "general_dc"|"autel"|"kempower"|"tritium", faultId: string, history: string[] }
+/**
+ * ✅ Decision Tree state (SAFE: no long callback_data)
+ * chatId -> { pack, faultId, history: [nodeId...], messageId }
+ */
 const dtState = new Map();
+
+function resetDt(chatId) {
+  dtState.delete(chatId);
+}
+
+function setDt(chatId, patch) {
+  const cur = dtState.get(chatId) || { pack: "", faultId: "", history: [], messageId: null };
+  const next = { ...cur, ...patch };
+  if (!Array.isArray(next.history)) next.history = [];
+  dtState.set(chatId, next);
+  return next;
+}
+
+function getDt(chatId) {
+  return dtState.get(chatId) || null;
+}
+
+function pushDtHistory(chatId, nodeId) {
+  const cur = getDt(chatId);
+  if (!cur) return;
+  const hist = Array.isArray(cur.history) ? cur.history : [];
+  const last = hist[hist.length - 1];
+  if (String(last) !== String(nodeId)) hist.push(String(nodeId));
+  setDt(chatId, { history: hist });
+}
+
+function popDtHistory(chatId) {
+  const cur = getDt(chatId);
+  if (!cur) return null;
+  const hist = Array.isArray(cur.history) ? [...cur.history] : [];
+  if (hist.length <= 1) return null;
+  hist.pop();
+  const prev = hist[hist.length - 1] || null;
+  setDt(chatId, { history: hist });
+  return prev;
+}
 
 /* =========================
    YAML DECISION TREE SUPPORT
    ========================= */
-function dtCallback(pack, faultId, nodeId) {
-  return `DT|${pack}|${faultId}|${nodeId}`;
-}
-function dtBackCallback(pack, faultId) {
-  return `DTB|${pack}|${faultId}`;
-}
 
 /**
  * ✅ Single source of truth for mapping pack -> loader.
@@ -530,43 +544,6 @@ function loadPackByName(pack) {
 function getFaultById(pack, id) {
   const data = loadPackByName(pack);
   return (data.faults || []).find((x) => String(x.id) === String(id));
-}
-
-function resetDt(chatId) {
-  dtState.delete(chatId);
-}
-
-// Push node into history (avoid duplicates)
-function pushDtHistory(chatId, pack, faultId, nodeId) {
-  const cur = dtState.get(chatId);
-
-  if (!cur || cur.pack !== pack || String(cur.faultId) !== String(faultId)) {
-    dtState.set(chatId, { pack, faultId: String(faultId), history: [String(nodeId)] });
-    return;
-  }
-
-  const hist = cur.history || [];
-  const last = hist[hist.length - 1];
-
-  if (String(last) !== String(nodeId)) {
-    hist.push(String(nodeId));
-    dtState.set(chatId, { ...cur, history: hist });
-  }
-}
-
-// Pop current node and return previous (or null)
-function popDtHistory(chatId, pack, faultId) {
-  const cur = dtState.get(chatId);
-  if (!cur || cur.pack !== pack || String(cur.faultId) !== String(faultId)) return null;
-
-  const hist = Array.isArray(cur.history) ? [...cur.history] : [];
-  if (hist.length <= 1) return null;
-
-  hist.pop();
-  const prev = hist[hist.length - 1] || null;
-
-  dtState.set(chatId, { ...cur, history: hist });
-  return prev;
 }
 
 /* =========================
@@ -637,27 +614,23 @@ function packMenuCallback(pack) {
 }
 
 async function showFaultCard({ chatId, messageId, pack, fault }) {
-  resetDt(chatId);
+  // Save which fault is currently "open" for DT (safe, no long callback_data)
+  setDt(chatId, {
+    pack,
+    faultId: String(fault?.id || ""),
+    history: [],
+    messageId: messageId || null,
+  });
 
   const rows = [];
 
   // Start DT (if present)
   if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
-    rows.push([
-      {
-        text: "🧭 Start troubleshooting",
-        callback_data: dtCallback(pack, fault.id, fault.decision_tree.start_node),
-      },
-    ]);
+    rows.push([{ text: "🧭 Start troubleshooting", callback_data: "dt:start" }]);
   }
 
   // Report from this fault (autofill)
-  rows.push([
-    {
-      text: "🧾 Create report for this fault",
-      callback_data: reportFromFaultCallback(pack, fault.id),
-    },
-  ]);
+  rows.push([{ text: "🧾 Create report for this fault", callback_data: reportFromFaultCallback(pack, fault.id) }]);
 
   // Back to menu
   rows.push([{ text: "⬅️ Back", callback_data: packMenuCallback(pack) }]);
@@ -690,9 +663,7 @@ function imageKeyToUrl(imageKey) {
   const relBase = key.replace(/^\/*/, "");
 
   const hasExt = /\.[a-z0-9]+$/i.test(relBase);
-  const candidates = hasExt
-    ? [relBase]
-    : [`${relBase}.png`, `${relBase}.jpg`, `${relBase}.jpeg`, `${relBase}.webp`];
+  const candidates = hasExt ? [relBase] : [`${relBase}.png`, `${relBase}.jpg`, `${relBase}.jpeg`, `${relBase}.webp`];
 
   for (const rel of candidates) {
     const localPath = path.join(IMAGES_DIR, rel);
@@ -704,11 +675,18 @@ function imageKeyToUrl(imageKey) {
   return PUBLIC_URL ? `${PUBLIC_URL}/images/${candidates[0]}` : "";
 }
 
+/**
+ * ✅ Renders current node based on dtState.
+ * Buttons are SAFE:
+ * - dt:o:<index>
+ * - dt:bk
+ * - dt:mn
+ */
 async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }) {
   const tree = fault?.decision_tree;
   const node = tree?.nodes?.[nodeId];
 
-  // menu-jump nodes if you ever reference them
+  // menu-jump nodes if referenced in YAML
   if (nodeId === "__MENU_GENERAL_DC__") return showGeneralDcMenu(chatId, messageId);
   if (nodeId === "__MENU_KEMPOWER__") return showKempowerMenu(chatId, messageId);
   if (nodeId === "__MENU_AUTEL__") return showAutelMenu(chatId, messageId);
@@ -723,26 +701,23 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
     });
   }
 
-  pushDtHistory(chatId, pack, fault.id, nodeId);
+  // Persist DT state (so option clicks can route safely)
+  setDt(chatId, { pack, faultId: String(fault.id), messageId: messageId || null });
+  pushDtHistory(chatId, nodeId);
 
   const text = node.prompt || "…";
 
-  const rows = (node.options || []).map((opt) => [
-    { text: opt.label || opt.text || "Next", callback_data: dtCallback(pack, fault.id, opt.next) },
-  ]);
+  const rows = [];
+  const opts = Array.isArray(node.options) ? node.options : [];
+  opts.forEach((opt, idx) => {
+    rows.push([{ text: opt.label || opt.text || "Next", callback_data: `dt:o:${idx}` }]);
+  });
 
-  rows.push([
-    {
-      text: "🧾 Create report for this fault",
-      callback_data: reportFromFaultCallback(pack, fault.id),
-    },
-  ]);
+  rows.push([{ text: "🧾 Create report for this fault", callback_data: reportFromFaultCallback(pack, fault.id) }]);
+  rows.push([{ text: "⬅️ Back", callback_data: "dt:bk" }]);
 
-  rows.push([{ text: "⬅️ Back", callback_data: dtBackCallback(pack, fault.id) }]);
-
-  // nicer label for general_dc
   const menuLabel = pack === "general_dc" ? "🏠 General DC menu" : `🏠 ${cap(pack)} menu`;
-  rows.push([{ text: menuLabel, callback_data: packMenuCallback(pack) }]);
+  rows.push([{ text: menuLabel, callback_data: "dt:mn" }]);
 
   const imageUrl = node.image ? imageKeyToUrl(node.image) : "";
 
@@ -1158,7 +1133,12 @@ function buildPackMenuKeyboard(pack) {
   const rows = [];
 
   if (!faults.length) {
-    rows.push([{ text: `⚠️ No ${pack === "general_dc" ? "General DC" : cap(pack)} faults loaded (check /debug/${pack})`, callback_data: "noop" }]);
+    rows.push([
+      {
+        text: `⚠️ No ${pack === "general_dc" ? "General DC" : cap(pack)} faults loaded (check /debug/${pack})`,
+        callback_data: "noop",
+      },
+    ]);
   } else {
     const prefix = pack.toUpperCase(); // GENERAL_DC / AUTEL / KEMPOWER / TRITIUM
     faults.forEach((f) => rows.push([{ text: f.title, callback_data: `${prefix}:${f.id}` }]));
@@ -1176,6 +1156,7 @@ function buildPackMenuKeyboard(pack) {
  * These IDs match the YAML we created.
  */
 function buildGeneralDcQuickKeyboard() {
+function buildGeneralDcQuickKeyboard() {
   const rows = [
     [{ text: "🟥 Will Not Power On", callback_data: "GENERAL_DC:general_dc_will_not_power_on" }],
     [{ text: "🟧 Won’t Start Charge", callback_data: "GENERAL_DC:general_dc_powers_on_wont_start_charge" }],
@@ -1186,6 +1167,7 @@ function buildGeneralDcQuickKeyboard() {
     [{ text: "⬛ E-Stop / Interlock", callback_data: "GENERAL_DC:general_dc_estop_interlock_active" }],
     [{ text: "🟠 Low Power / Derating", callback_data: "GENERAL_DC:general_dc_power_derating_low_power" }],
     [{ text: "🖥️ HMI Frozen", callback_data: "GENERAL_DC:general_dc_hmi_frozen_unresponsive" }],
+
     [{ text: "📋 View all General DC faults", callback_data: "general_dc:all" }],
     [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
     [{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }],
@@ -1193,6 +1175,8 @@ function buildGeneralDcQuickKeyboard() {
   ];
 
   return rows;
+}
+
 }
 
 async function showGeneralDcMenu(chatId, messageId) {
@@ -1292,13 +1276,16 @@ bot.onText(/^\/cancel$/, async (msg) => {
   await bot.sendMessage(msg.chat.id, "✅ Cancelled.");
 });
 
+/* =========================
+   REPORT TEXT CAPTURE
+   ========================= */
 // Capture text replies during report wizard
 bot.on("message", async (msg) => {
   const chatId = msg?.chat?.id;
   const text = (msg?.text || "").trim();
   if (!chatId) return;
 
-  // If it's a photo message, photo handler below will deal with it
+  // photo handler handles photos
   if (!text) return;
 
   // ignore commands
@@ -1335,7 +1322,7 @@ bot.on("message", async (msg) => {
   if (st.step === "clientRef") {
     setReport(chatId, { data: { clientRef: text } });
 
-    // If report started from a fault card, manufacturer+fault are already set, so skip selection
+    // If report started from a fault card, skip manufacturer/fault selection
     if (st.data?.prefilled) return askActions(chatId);
 
     return askReportManufacturer(chatId);
@@ -1347,7 +1334,10 @@ bot.on("message", async (msg) => {
   }
 });
 
-// NEW: Capture photo uploads during the photo step (silent)
+/* =========================
+   PHOTO CAPTURE (Report)
+   ========================= */
+// Capture photo uploads during the photo step (silent)
 bot.on("photo", async (msg) => {
   const chatId = msg?.chat?.id;
   if (!chatId) return;
@@ -1378,24 +1368,24 @@ bot.on("callback_query", async (q) => {
   const data = q?.data || "";
 
   // Answer callback ONCE (safe)
-  try { await bot.answerCallbackQuery(q.id); } catch (_) {}
+  try {
+    await bot.answerCallbackQuery(q.id);
+  } catch (_) {}
 
-  // ✅ HARD GUARDS (prevents loops + log floods)
-  // 1) Ignore old callbacks (Telegram retries / deploy churn)
+  // Guards (prevents loops + log floods)
   const msgDate = q?.message?.date; // seconds
-  if (msgDate && (Date.now() / 1000 - msgDate) > 120) return;
+  if (msgDate && Date.now() / 1000 - msgDate > 120) return;
 
-  // 2) Per-chat rate limit (stops button spam / runaway loops)
   global.__EVBOT_CB_RL = global.__EVBOT_CB_RL || new Map();
   const now = Date.now();
-  const last = chatId ? (global.__EVBOT_CB_RL.get(chatId) || 0) : 0;
-  if (chatId && (now - last) < 350) return;
+  const last = chatId ? global.__EVBOT_CB_RL.get(chatId) || 0 : 0;
+  if (chatId && now - last < 350) return;
   if (chatId) global.__EVBOT_CB_RL.set(chatId, now);
 
   if (!chatId) return;
   if (data === "noop") return;
 
-
+  /* --------- GLOBAL NAV --------- */
   if (data === "reset") {
     clearReport(chatId);
     resetDt(chatId);
@@ -1408,7 +1398,6 @@ bot.on("callback_query", async (q) => {
     return showManufacturerMenu(chatId, messageId);
   }
 
-  // Quick route: General DC "all faults" list
   if (data === "general_dc:all") {
     clearReport(chatId);
     resetDt(chatId);
@@ -1424,7 +1413,7 @@ bot.on("callback_query", async (q) => {
     return showManufacturerMenu(chatId, messageId);
   }
 
-  // ✅ handle "<pack>:menu" BEFORE generic ":" handling
+  // "<pack>:menu"
   if (data.endsWith(":menu")) {
     const pack = data.split(":")[0].toLowerCase();
     resetDt(chatId);
@@ -1434,6 +1423,7 @@ bot.on("callback_query", async (q) => {
     return showAutelMenu(chatId, messageId);
   }
 
+  /* --------- REPORT FROM FAULT CARD --------- */
   if (data.startsWith("RF|")) {
     const [, pack, faultId] = data.split("|");
     const fault = getFaultById(pack, faultId);
@@ -1442,43 +1432,104 @@ bot.on("callback_query", async (q) => {
     return startReportFromFault(chatId, pack, fault);
   }
 
-  if (data.startsWith("DTB|")) {
-    const [, pack, faultId] = data.split("|");
-    const fault = getFaultById(pack, faultId);
-    if (!fault) {
-      resetDt(chatId);
-      if (pack === "general_dc") return showGeneralDcMenu(chatId, messageId);
-      return pack === "kempower"
-        ? showKempowerMenu(chatId, messageId)
-        : pack === "tritium"
-        ? showTritiumMenu(chatId, messageId)
-        : showAutelMenu(chatId, messageId);
+  /* =========================
+     ✅ DECISION TREE (SAFE)
+     ========================= */
+
+  // Start decision tree from fault card
+  if (data === "dt:start") {
+    const st = getDt(chatId);
+    if (!st?.pack || !st?.faultId) {
+      return bot.sendMessage(chatId, "⚠️ No active fault selected. Go back and open a fault first.");
     }
-
-    const prevNode = popDtHistory(chatId, pack, faultId);
-    if (!prevNode) return showFaultCard({ chatId, messageId, pack, fault });
-
-    return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId: prevNode });
+    const fault = getFaultById(st.pack, st.faultId);
+    if (!fault?.decision_tree?.start_node) {
+      return bot.sendMessage(chatId, "⚠️ This fault has no decision tree.");
+    }
+    // reset history and render start node
+    setDt(chatId, { history: [] });
+    return renderYamlDecisionNode({
+      chatId,
+      messageId,
+      pack: st.pack,
+      fault,
+      nodeId: fault.decision_tree.start_node,
+    });
   }
 
-  if (data.startsWith("DT|")) {
-    const [, pack, faultId, nodeId] = data.split("|");
-    const fault = getFaultById(pack, faultId);
-
-    if (!fault) {
-      resetDt(chatId);
-      return upsertMessage(chatId, {
-        messageId,
-        text: "⚠️ Fault not found.",
-        parse_mode: "HTML",
-        reply_markup: kb([[{ text: "⬅️ Back", callback_data: packMenuCallback(pack) }]]),
-      });
+  // Decision tree option click: dt:o:<index>
+  if (data.startsWith("dt:o:")) {
+    const st = getDt(chatId);
+    if (!st?.pack || !st?.faultId) {
+      return bot.sendMessage(chatId, "⚠️ No active fault selected. Open a fault first.");
     }
 
-    return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId });
+    const idx = Number(data.split(":")[2]);
+    if (Number.isNaN(idx)) return;
+
+    const fault = getFaultById(st.pack, st.faultId);
+    const tree = fault?.decision_tree;
+    if (!tree?.nodes || !tree?.start_node) return;
+
+    // current node is last in history, or start_node if history empty
+    const currentNodeId =
+      Array.isArray(st.history) && st.history.length ? st.history[st.history.length - 1] : tree.start_node;
+
+    const node = tree.nodes[currentNodeId];
+    const opts = Array.isArray(node?.options) ? node.options : [];
+    const opt = opts[idx];
+    const nextNodeId = opt?.next;
+
+    if (!nextNodeId) {
+      return bot.sendMessage(chatId, "⚠️ Option is missing a next node.");
+    }
+
+    return renderYamlDecisionNode({
+      chatId,
+      messageId,
+      pack: st.pack,
+      fault,
+      nodeId: nextNodeId,
+    });
   }
 
-  // ------------------- REPORT CALLBACKS -------------------
+  // Back within decision tree
+  if (data === "dt:bk") {
+    const st = getDt(chatId);
+    if (!st?.pack || !st?.faultId) return;
+
+    const fault = getFaultById(st.pack, st.faultId);
+    if (!fault) return showManufacturerMenu(chatId, messageId);
+
+    const prevNode = popDtHistory(chatId);
+    if (!prevNode) {
+      // back to fault card
+      return showFaultCard({ chatId, messageId, pack: st.pack, fault });
+    }
+
+    return renderYamlDecisionNode({
+      chatId,
+      messageId,
+      pack: st.pack,
+      fault,
+      nodeId: prevNode,
+    });
+  }
+
+  // Menu jump from DT
+  if (data === "dt:mn") {
+    const st = getDt(chatId);
+    if (!st?.pack) return showManufacturerMenu(chatId, messageId);
+
+    resetDt(chatId);
+
+    if (st.pack === "general_dc") return showGeneralDcMenu(chatId, messageId);
+    if (st.pack === "kempower") return showKempowerMenu(chatId, messageId);
+    if (st.pack === "tritium") return showTritiumMenu(chatId, messageId);
+    return showAutelMenu(chatId, messageId);
+  }
+
+  /* ------------------- REPORT CALLBACKS ------------------- */
   if (data === "r:cancel") {
     clearReport(chatId);
     return bot.sendMessage(chatId, "✅ Report cancelled.");
@@ -1522,13 +1573,7 @@ bot.on("callback_query", async (q) => {
     const id = parts[3];
 
     const pack =
-      type === "GENERAL_DC"
-        ? "general_dc"
-        : type === "KEMPOWER"
-        ? "kempower"
-        : type === "TRITIUM"
-        ? "tritium"
-        : "autel";
+      type === "GENERAL_DC" ? "general_dc" : type === "KEMPOWER" ? "kempower" : type === "TRITIUM" ? "tritium" : "autel";
 
     const f = getFaultById(pack, id);
     const t = getReportTemplateFromFault(f) || defaultReportTemplate();
@@ -1576,7 +1621,9 @@ bot.on("callback_query", async (q) => {
     const title = st?.data?.faultTitle ? `\n\n<b>Fault:</b> ${escapeHtml(st.data.faultTitle)}` : "";
     const mfr =
       st?.data?.manufacturer
-        ? `\n<b>Manufacturer:</b> ${escapeHtml(st.data.manufacturer === "general_dc" ? "General DC" : cap(st.data.manufacturer))}`
+        ? `\n<b>Manufacturer:</b> ${escapeHtml(
+            st.data.manufacturer === "general_dc" ? "General DC" : cap(st.data.manufacturer)
+          )}`
         : "";
 
     return upsertMessage(chatId, {
@@ -1602,7 +1649,7 @@ bot.on("callback_query", async (q) => {
     return finishReport(chatId);
   }
 
-  // ------------------- FAULT SELECTION (STRICT PACK ROUTING) -------------------
+  /* ------------------- FAULT SELECTION (STRICT PACK ROUTING) ------------------- */
   if (data.startsWith("GENERAL_DC:")) {
     const id = data.split(":")[1];
     const fault = getFaultById("general_dc", id);
@@ -1663,7 +1710,7 @@ bot.on("callback_query", async (q) => {
     return showFaultCard({ chatId, messageId, pack: "tritium", fault });
   }
 
-  // ignore unknown callback data
+  // ignore unknown callback data safely
 });
 
 /* =========================
@@ -1675,7 +1722,6 @@ if (useWebhook) {
       const got = req.get("x-telegram-bot-api-secret-token");
       if (got !== TELEGRAM_WEBHOOK_SECRET) return res.sendStatus(401);
     }
-
     bot.processUpdate(req.body);
     res.sendStatus(200);
   });
