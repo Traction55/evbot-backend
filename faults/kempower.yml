@@ -36,6 +36,13 @@ faults:
       - "SSC_PMC_VOLTAGE_MISSING"
       - "PMC offline"
       - "DPDM missing"
+      # Added recognition variants
+      - "PMC unavailable"
+      - "PMC not available"
+      - "Power module unavailable"
+      - "Relay card missing"
+      - "PMC voltage missing"
+      - "PMC enable line error"
 
     triggers:
       any_text_contains:
@@ -66,6 +73,13 @@ faults:
         - "ssc_pmc_enable_line_error"
         - "SSC_PMC_VOLTAGE_MISSING"
         - "ssc_pmc_voltage_missing"
+        # Added recognition variants
+        - "pmc unavailable"
+        - "pmc not available"
+        - "relay card missing"
+        - "pmc voltage missing"
+        - "pmc enable line"
+        - "pmc communication error"
 
     description: >
       One or more Power Modules (PMC) or the Power Distribution Module (DPDM) is offline, missing, or failing
@@ -357,7 +371,7 @@ faults:
 
 
   # ============================================================
-  # Other top faults (unchanged from your current file)
+  # Other top faults (updated recognition variants where safe)
   # ============================================================
 
   - id: kempower_no_heartbeat
@@ -365,9 +379,22 @@ faults:
     charger_type: dc
     title: "Satellite / Control Unit Offline (No Communication)"
 
-    aliases: ["no heartbeat", "satellite offline", "control unit offline"]
+    aliases:
+      - "NO_HEARTBEAT"
+      - "no heartbeat"
+      - "heartbeat missing"
+      - "satellite offline"
+      - "satellite not responding"
+      - "control unit offline"
+      - "control unit not responding"
     triggers:
-      any_text_contains: ["NO_HEARTBEAT", "no heartbeat"]
+      any_text_contains:
+        - "NO_HEARTBEAT"
+        - "no_heartbeat"
+        - "no heartbeat"
+        - "heartbeat missing"
+        - "satellite offline"
+        - "control unit offline"
     severity: high
     tags: [network, ethernet, satellite, control_unit, offline]
 
@@ -431,9 +458,20 @@ faults:
     charger_type: dc
     title: "Vehicle Communication Failed (CCS Control Pilot Not Ready)"
 
-    aliases: ["comm not ready", "ccs not ready", "control pilot fault"]
+    aliases:
+      - "comm not ready"
+      - "ccs not ready"
+      - "control pilot fault"
+      - "COMM_NOT_READY"
+      - "control pilot not ready"
+      - "vehicle communication failed"
     triggers:
-      any_text_contains: ["COMM_NOT_READY", "comm_not_ready"]
+      any_text_contains:
+        - "COMM_NOT_READY"
+        - "comm_not_ready"
+        - "comm not ready"
+        - "control pilot not ready"
+        - "ccs not ready"
     severity: high
     tags: [ccs, control_pilot, connector, startup]
 
@@ -496,9 +534,20 @@ faults:
     charger_type: ac
     title: "Earth Leakage Detected (Residual Current Monitor Trip)"
 
-    aliases: ["rcm bad", "residual current leak", "earth leakage"]
+    aliases:
+      - "rcm bad"
+      - "residual current leak"
+      - "earth leakage"
+      - "RCM_BAD"
+      - "residual current monitor tripped"
+      - "earth leakage detected"
     triggers:
-      any_text_contains: ["RCM_BAD", "rcm_bad"]
+      any_text_contains:
+        - "RCM_BAD"
+        - "rcm_bad"
+        - "rcm bad"
+        - "residual current"
+        - "earth leakage"
     severity: high
     tags: [safety, rcd, rcm, earth_leakage, type2]
 
@@ -561,9 +610,16 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Grid Input Stage Communication Fault (AFE Internal Comms)"
-    aliases: ["afe communication error", "pmc comms bus error"]
+    aliases:
+      - "afe communication error"
+      - "pmc comms bus error"
+      - "AFE_COMMUNICATION_ERROR"
+      - "afe internal comms error"
     triggers:
-      any_text_contains: ["AFE_COMMUNICATION_ERROR", "afe_communication_error"]
+      any_text_contains:
+        - "AFE_COMMUNICATION_ERROR"
+        - "afe_communication_error"
+        - "afe communication"
     severity: medium
     tags: [pmc, afe, firmware, comms]
 
@@ -614,9 +670,18 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Cooling Fan Electrical Fault (Fan Current Out of Range)"
-    aliases: ["fan current", "fan fault", "thermal performance reduced"]
+    aliases:
+      - "fan current"
+      - "fan fault"
+      - "thermal performance reduced"
+      - "FAN_CURRENT"
+      - "fan electrical fault"
+      - "fan current error"
     triggers:
-      any_text_contains: ["FAN_CURRENT", "fan_current"]
+      any_text_contains:
+        - "FAN_CURRENT"
+        - "fan_current"
+        - "fan current"
     severity: medium
     tags: [fan, cooling, airflow, firmware, pmc]
 
@@ -679,9 +744,17 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Incoming Supply Too Low (Undervoltage / Phase Issue)"
-    aliases: ["primary undervoltage", "supply too low"]
+    aliases:
+      - "primary undervoltage"
+      - "supply too low"
+      - "PRIMARY_UNDERVOLTAGE"
+      - "supply undervoltage"
     triggers:
-      any_text_contains: ["PRIMARY_UNDERVOLTAGE", "primary_undervoltage"]
+      any_text_contains:
+        - "PRIMARY_UNDERVOLTAGE"
+        - "primary_undervoltage"
+        - "primary undervoltage"
+        - "supply too low"
     severity: high
     tags: [grid, supply, undervoltage, wiring, pmc]
 
@@ -741,9 +814,19 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Electrical Safety Fault Detected (Isolation / Moisture Risk)"
-    aliases: ["rt safety error", "isolation fault", "pmc safety error"]
+    aliases:
+      - "rt safety error"
+      - "isolation fault"
+      - "pmc safety error"
+      - "RT_SAFETY_ERROR_IN_THIS_PMC"
+      - "safety error in pmc"
+      - "pmc isolation fault"
     triggers:
-      any_text_contains: ["RT_SAFETY_ERROR_IN_THIS_PMC", "rt_safety_error_in_this_pmc"]
+      any_text_contains:
+        - "RT_SAFETY_ERROR_IN_THIS_PMC"
+        - "rt_safety_error_in_this_pmc"
+        - "safety error"
+        - "isolation fault"
     severity: critical
     tags: [safety, insulation, isolation, water_ingress, dpdm, maintenance]
 
@@ -794,9 +877,19 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Internal System Fault – Self-Test Failed"
-    aliases: ["ssc selftest internal error", "self check failed", "all connectors failed"]
+    aliases:
+      - "ssc selftest internal error"
+      - "self check failed"
+      - "all connectors failed"
+      - "SSC_SELFTEST_INTERNAL_ERROR"
+      - "self test failed"
+      - "system self check failed"
     triggers:
-      any_text_contains: ["SSC_SELFTEST_INTERNAL_ERROR", "ssc_selftest_internal_error"]
+      any_text_contains:
+        - "SSC_SELFTEST_INTERNAL_ERROR"
+        - "ssc_selftest_internal_error"
+        - "selftest internal error"
+        - "self test failed"
     severity: critical
     tags: [self_check, configuration, canbus, software, dpdm]
 
