@@ -35,6 +35,16 @@ const path = require("path");
 const yaml = require("js-yaml");
 const TelegramBot = require("node-telegram-bot-api");
 
+function logEvent(event, data = {}) {
+  console.log(
+    JSON.stringify({
+      event,
+      ...data,
+      ts: new Date().toISOString(),
+    })
+  );
+}
+
 /* =========================
    HTML SAFETY (Telegram)
    ========================= */
@@ -1250,10 +1260,17 @@ async function showTritiumMenu(chatId, messageId) {
    ========================= */
 bot.onText(/^\/start$/, async (msg) => {
   const chatId = msg.chat.id;
+
+  // 🔍 usage logging (anonymous)
+  logEvent("start", {
+    lang: msg.from?.language_code || "unknown",
+  });
+
   clearReport(chatId);
   resetDt(chatId);
   await showManufacturerMenu(chatId);
 });
+
 
 bot.onText(/^\/ping$/, async (msg) => {
   await bot.sendMessage(msg.chat.id, "✅ pong");
