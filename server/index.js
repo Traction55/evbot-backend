@@ -13,6 +13,11 @@
  * - Decision-tree callback_data is now tiny: dt:start / dt:o:0 / dt:bk / dt:mn
  *   (No pack/fault/node strings inside callback_data)
  *
+ * ✅ FIX (No “45 sec dead buttons”):
+ * - Removed the “ignore callback if message older than 120s” guard.
+ * - Always answerCallbackQuery with a small toast (prevents spinner + feels responsive).
+ * - Added safe fallback: if Telegram says “message is not modified” or edit fails, we send a new message.
+ *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
  *   PUBLIC_URL=https://your-railway-domain.up.railway.app
@@ -283,7 +288,8 @@ const bot = new TelegramBot(
     : {
         polling: {
           interval: 1000,
-          params: { timeout: 20 },
+          // IMPORTANT: Telegram long-poll timeout is server-side. 20–60 is fine.
+          params: { timeout: 30 },
         },
       }
 );
@@ -303,6 +309,18 @@ function cap(s) {
   return v ? v.charAt(0).toUpperCase() + v.slice(1) : "";
 }
 
+// Treat “message not modified” and “message can’t be edited” as non-fatal
+function isIgnorableTelegramEditError(err) {
+  const msg = String(err?.message || err || "").toLowerCase();
+  return (
+    msg.includes("message is not modified") ||
+    msg.includes("message to edit not found") ||
+    msg.includes("message can't be edited") ||
+    msg.includes("message_id_invalid") ||
+    msg.includes("chat not found")
+  );
+}
+
 // Edit message if possible (clean UX), else send a new one
 async function upsertMessage(chatId, opts) {
   const { text, parse_mode, reply_markup, messageId } = opts;
@@ -314,8 +332,11 @@ async function upsertMessage(chatId, opts) {
         parse_mode,
         reply_markup,
       });
-    } catch (_) {
-      // fallback below
+    } catch (e) {
+      // If edit fails (old message / already edited / etc), fall back to sending a new message
+      if (!isIgnorableTelegramEditError(e)) {
+        console.error("❌ editMessageText failed:", e?.message || e);
+      }
     }
   }
   return bot.sendMessage(chatId, text, { parse_mode, reply_markup });
@@ -341,7 +362,10 @@ async function upsertPhotoOrText(chatId, opts) {
           reply_markup,
         });
         return;
-      } catch (_) {
+      } catch (e) {
+        if (!isIgnorableTelegramEditError(e)) {
+          console.error("❌ editMessageCaption failed:", e?.message || e);
+        }
         // fall through to sendPhoto
       }
     }
@@ -1364,19 +1388,16 @@ bot.on("callback_query", async (q) => {
   const messageId = q?.message?.message_id;
   const data = q?.data || "";
 
-  // Answer callback ONCE (safe)
+  // Always answer callback to stop spinner (and keep Telegram happy)
   try {
-    await bot.answerCallbackQuery(q.id);
+    await bot.answerCallbackQuery(q.id, { text: "✅", show_alert: false });
   } catch (_) {}
 
-  // Guards (prevents loops + log floods)
-  const msgDate = q?.message?.date; // seconds
-  if (msgDate && Date.now() / 1000 - msgDate > 120) return;
-
+  // Keep your small per-chat debounce (helps double-taps), but NO time-limit cut-off.
   global.__EVBOT_CB_RL = global.__EVBOT_CB_RL || new Map();
   const now = Date.now();
   const last = chatId ? global.__EVBOT_CB_RL.get(chatId) || 0 : 0;
-  if (chatId && now - last < 350) return;
+  if (chatId && now - last < 250) return;
   if (chatId) global.__EVBOT_CB_RL.set(chatId, now);
 
   if (!chatId) return;
@@ -1707,7 +1728,7 @@ bot.on("callback_query", async (q) => {
     return showFaultCard({ chatId, messageId, pack: "tritium", fault });
   }
 
-  // ignore unknown callback data safely
+  // Unknown callback: do nothing (safe)
 });
 
 /* =========================
