@@ -359,36 +359,16 @@ async function upsertMessage(chatId, opts) {
  * - otherwise sendPhoto as a fresh message
  */
 async function upsertPhotoOrText(chatId, opts) {
-  const { messageId, text, parse_mode, reply_markup, imageUrl } = opts;
+  const { messageId, text, parse_mode, reply_markup } = opts;
 
-  if (imageUrl) {
-    // Attempt to edit caption first (only works if prior message is a photo)
-    if (messageId) {
-      try {
-        await bot.editMessageCaption(text, {
-          chat_id: chatId,
-          message_id: messageId,
-          parse_mode,
-          reply_markup,
-        });
-        return;
-      } catch (e) {
-        if (!isIgnorableTelegramEditError(e)) {
-          console.error("❌ editMessageCaption failed:", e?.message || e);
-        }
-        // fall through to sendPhoto
-      }
-    }
-
-    return bot.sendPhoto(chatId, imageUrl, {
-      caption: text,
-      parse_mode,
-      reply_markup,
-    });
-  }
-
-  return upsertMessage(chatId, { chatId, messageId, text, parse_mode, reply_markup });
+  return upsertMessage(chatId, {
+    messageId,
+    text,
+    parse_mode,
+    reply_markup,
+  });
 }
+
 
 /* =========================
    REPORT CHECKLIST (MFR + FAULT AWARE)
