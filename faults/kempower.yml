@@ -5,20 +5,14 @@
 faults:
 
   # ============================================================
-  # MERGED: All "Power Module" related faults -> ONE decision tree
-  # Covers:
-  # - Generic Power Module / Power Stack fault
-  # - RT_PMC_UNAVAILABLE (PMC not communicating)
-  # - RT_RELAYCARD_MISSING (DPDM missing)
-  # - SSC_PMC_COMMUNICATION_ERROR (self-check comms / drive command failed)
-  # - SSC_PMC_ENABLE_LINE_ERROR (enable line / control signal missing)
-  # - SSC_PMC_VOLTAGE_MISSING (no DC voltage detected)
+  # MERGED CLUSTER (REWRITE): Power Modules Offline / Derating
+  # Keep ID stable for deep-links: kempower_power_module_cluster
   # ============================================================
 
   - id: kempower_power_module_cluster
     platform: kempower
     charger_type: dc
-    title: "Power Module / Power Stack Fault (PMC / DPDM)"
+    title: "Power Modules Offline / Derating (PMC / DPDM)"
     severity: high
     tags: [power, module, pmc, dpdm, rectifier, derate, self_check]
 
@@ -36,13 +30,6 @@ faults:
       - "SSC_PMC_VOLTAGE_MISSING"
       - "PMC offline"
       - "DPDM missing"
-      # Added recognition variants
-      - "PMC unavailable"
-      - "PMC not available"
-      - "Power module unavailable"
-      - "Relay card missing"
-      - "PMC voltage missing"
-      - "PMC enable line error"
 
     triggers:
       any_text_contains:
@@ -73,22 +60,18 @@ faults:
         - "ssc_pmc_enable_line_error"
         - "SSC_PMC_VOLTAGE_MISSING"
         - "ssc_pmc_voltage_missing"
-        # Added recognition variants
-        - "pmc unavailable"
-        - "pmc not available"
-        - "relay card missing"
-        - "pmc voltage missing"
-        - "pmc enable line"
-        - "pmc communication error"
 
     description: >
-      One or more Power Modules (PMC) or the Power Distribution Module (DPDM) is offline, missing, or failing
-      self-check. This commonly causes derating (reduced kW) or makes the charger unavailable.
+      One or more Power Modules (PMCs) or the Power Distribution Module (DPDM) is not contributing to DC output.
+      The system may be missing the module, unable to communicate with it, or the module has self-inhibited due to
+      protection (thermal/electrical) or a control/enable signal issue. This typically causes derating (reduced kW)
+      when some PMCs remain online, or charger unavailability when multiple PMCs/DPDM are affected.
 
     safety_notes:
       - Follow site LOTO and Kempower safety procedures before cabinet access
       - Do not reseat or move modules unless authorised/trained
       - Do not re-energise if signs of damage or overheating are present
+      - Do not repeatedly reset tripping breakers/fuses—investigate cause
 
     decision_tree:
       start_node: PM0
@@ -96,8 +79,64 @@ faults:
 
         PM0:
           prompt: |
-            *Power Module / Power Stack Fault (PMC / DPDM)*
-            First—pick the symptom that matches the alarm:
+            *Power Modules Offline / Derating (PMC / DPDM)*
+            Start with what you’re seeing (symptom-first):
+          options:
+            - label: "⚠️ Charging but reduced kW (derating)"
+              next: PM_PATTERN_DERATE
+            - label: "🚫 Charger unavailable / won’t start sessions"
+              next: PM_PATTERN_UNAVAILABLE
+            - label: "🔎 I have a specific Kempower code"
+              next: PM_CODE_PICKER
+            - label: "⚠️ Generic power module / power stack fault"
+              next: PM_PATTERN_GENERIC
+
+        # ---------- Pattern check (collapses uncertainty early) ----------
+        PM_PATTERN_DERATE:
+          prompt: |
+            *Pattern check — Derating*
+            Is this affecting one cabinet/stack or multiple?
+          options:
+            - label: "One cabinet/stack"
+              next: PM_PATTERN_WHICH
+            - label: "Multiple / unclear"
+              next: PM_PATTERN_WHICH
+
+        PM_PATTERN_UNAVAILABLE:
+          prompt: |
+            *Pattern check — Unavailable*
+            Is it one cabinet/stack or the whole station?
+          options:
+            - label: "One cabinet/stack"
+              next: PM_PATTERN_WHICH
+            - label: "Whole station / multiple"
+              next: PM_PATTERN_WHICH
+
+        PM_PATTERN_GENERIC:
+          prompt: |
+            *Pattern check*
+            Before touching anything: identify whether it’s derating (some PMCs online) or unavailable (many offline).
+          options:
+            - label: "Derating"
+              next: PM_PATTERN_DERATE
+            - label: "Unavailable"
+              next: PM_PATTERN_UNAVAILABLE
+
+        PM_PATTERN_WHICH:
+          prompt: |
+            *Identify scope*
+            Can you identify a specific cabinet/slot/module (PMC) related to the alarm?
+            (HMI details, cabinet labels, or recent work notes)
+          options:
+            - label: "Yes — specific cabinet/module/slot"
+              next: PM_SAFETY
+            - label: "No — unclear"
+              next: PM_SAFETY
+
+        # ---------- Code picker (moved behind symptom-first) ----------
+        PM_CODE_PICKER:
+          prompt: |
+            *Select the closest code/symptom shown on HMI:*
           options:
             - label: "🧩 PMC Offline / Not communicating (RT_PMC_UNAVAILABLE)"
               next: PM_SYM_PMC_OFFLINE
@@ -109,16 +148,16 @@ faults:
               next: PM_SYM_ENABLE_LINE
             - label: "❌ No DC voltage / not producing output (SSC_PMC_VOLTAGE_MISSING)"
               next: PM_SYM_NO_DC_VOLT
-            - label: "⚠️ Generic power module / power stack fault"
+            - label: "⚠️ Not sure / generic power module fault"
               next: PM_SYM_GENERIC
 
         # ---------- Common safety gate ----------
         PM_SAFETY:
           prompt: |
-            ✅ *Safety first*
+            ✅ *Safety first (non-negotiable)*
             - LOTO / isolation applied per site procedure
             - Allow discharge time before opening cabinet
-            - If smell/heat/smoke: stop and escalate
+            - If heat/smell/smoke/water ingress: stop and escalate
           options:
             - label: "Continue ➡️"
               next: PM_VISUAL
@@ -127,9 +166,9 @@ faults:
         PM_VISUAL:
           prompt: |
             👀 *Visual checks (cabinet + rack)*
-            - Any burnt smell / discoloration / melted insulation?
-            - Any loose lugs, arcing marks, water ingress?
-            - Any obvious connector damage / bent pins?
+            - Burnt smell / discoloration / melted insulation?
+            - Loose lugs, arcing marks, water ingress?
+            - Connector damage / bent pins?
           options:
             - label: "🔥 Damage found"
               next: PM_ESC_UNSAFE
@@ -138,7 +177,7 @@ faults:
 
         PM_SUPPLY:
           prompt: |
-            ⚡ *Supply checks*
+            ⚡ *Supply checks (safe-first)*
             - Any upstream CB/fuse tripped?
             - Confirm supply present (and stable if possible)
             - If multi-feed: confirm correct feed live
@@ -151,11 +190,13 @@ faults:
         PM_SUPPLY_FIX:
           prompt: |
             *Supply / breaker recovery*
-            - Reset tripped breaker/fuse once only (if permitted)
-            - If it trips again: suspect fault—do not keep resetting
+            - Reset a tripped breaker/fuse once only (if permitted)
+            - If it trips again: do NOT keep resetting—suspect fault and escalate
           options:
-            - label: "Recovered"
-              next: PM_DONE
+            - label: "Recovered (charger now available / derate cleared)"
+              next: PM_DONE_RESOLVED
+            - label: "Recovered but still derating"
+              next: PM_DONE_STAB
             - label: "Trips again / still faulting"
               next: PM_ESC
 
@@ -167,14 +208,16 @@ faults:
             - Power ON
             - Re-check alarms / availability
           options:
-            - label: "Recovered after power cycle ✅"
-              next: PM_DONE
+            - label: "Recovered (normal output) ✅"
+              next: PM_DONE_RESOLVED
+            - label: "Recovered but still derating ⚠️"
+              next: PM_DONE_STAB
             - label: "Still faulting"
               next: PM_IDENTIFY
 
         PM_IDENTIFY:
           prompt: |
-            *Identify where the fault is*
+            *Identify where the fault is (now get specific)*
             Can you identify a specific cabinet / slot / module (PMC) related to the alarm?
           options:
             - label: "Yes — specific module/slot"
@@ -187,7 +230,7 @@ faults:
             *Reseat / connector inspection (authorised only)*
             If permitted:
             - Apply LOTO
-            - Reseat affected module (PMC) / DPDM connectors
+            - Reseat affected PMC / DPDM connectors
             - Inspect connector pins for burning/bent pins/contamination
           options:
             - label: "🔥 Damage found"
@@ -199,12 +242,14 @@ faults:
 
         PM_RETEST:
           prompt: |
-            *Re-test*
+            *Re-test (observe what changed)*
             Re-energise and run a short session (if safe).
             Monitor output stability and recurrence.
           options:
-            - label: "Resolved ✅"
-              next: PM_DONE
+            - label: "Resolved (normal output) ✅"
+              next: PM_DONE_RESOLVED
+            - label: "Charging but derated ⚠️"
+              next: PM_DONE_STAB
             - label: "Still faulting"
               next: PM_SWAP
 
@@ -223,7 +268,7 @@ faults:
 
         PM_FW_CHECK:
           prompt: |
-            *Firmware / configuration checks*
+            *Firmware / configuration checks (after safe hardware checks)*
             Check:
             - Station firmware version
             - Any recent updates/rollbacks
@@ -236,10 +281,11 @@ faults:
 
         PM_LOGS:
           prompt: |
-            🗂️ *Logs & evidence*
+            🗂️ *Logs & evidence (prepare for escalation)*
             - Note exact code/message + timestamps
             - Capture HMI screenshots
             - Capture any backend/session screenshots if available
+            - Note derate level (kW) and whether it’s stable or fluctuating
           options:
             - label: "Escalate with evidence"
               next: PM_ESC
@@ -254,7 +300,7 @@ faults:
             - seating / rear connector pins
             - 24V/AUX supply issue
             - module fault vs slot/backplane
-            Proceed through the standard isolate → visual → supply → cycle → reseat → swap path.
+            Proceed through the standard path (safety → visual → supply → cycle → reseat → swap).
           options:
             - label: "Start checks ➡️"
               next: PM_SAFETY
@@ -266,7 +312,7 @@ faults:
             - comms loss between cabinets (dynamic systems)
             - Ethernet wiring/switch ports
             - connector pin damage
-            You’ll do standard checks, plus comms between cabinets.
+            Proceed with standard checks; capture comms/cabinet details for escalation.
           options:
             - label: "Start checks ➡️"
               next: PM_SAFETY
@@ -275,7 +321,7 @@ faults:
           prompt: |
             *Self-check comms / drive command failed (SSC_PMC_COMMUNICATION_ERROR)*
             If SSC fan control errors exist, address those first.
-            Otherwise, treat as seating/comms/module fault and proceed.
+            Otherwise treat as seating/comms/module fault and proceed.
           options:
             - label: "Start checks ➡️"
               next: PM_SAFETY
@@ -285,9 +331,9 @@ faults:
             *Enable line / control signal missing (SSC_PMC_ENABLE_LINE_ERROR)*
             Often related to:
             - EN line continuity between PMC and DPDM
-            - CT lines / wiring after recent work
+            - wiring after recent work
             - connector pins
-            Proceed with standard checks, then escalate with continuity results.
+            Proceed with standard checks, then escalate with findings.
           options:
             - label: "Start checks ➡️"
               next: PM_SAFETY
@@ -306,12 +352,12 @@ faults:
         PM_SYM_GENERIC:
           prompt: |
             *Generic Power Module / Power Stack Fault*
-            Proceed through the standard isolate → visual → supply → cycle → reseat → swap path.
+            Proceed with the standard path (safety → visual → supply → cycle → reseat → swap).
           options:
             - label: "Start checks ➡️"
               next: PM_SAFETY
 
-        # ---------- Outcomes ----------
+        # ---------- Outcomes (explicit end states) ----------
         PM_REPLACE_MODULE:
           prompt: |
             ✅ *Fault follows module*
@@ -327,7 +373,7 @@ faults:
           prompt: |
             🧩 *Fault stays with slot/backplane*
             Likely slot/backplane/harness/controller-side issue.
-            - Inspect slot connector pins + harness seating
+            - Inspect slot connector pins + harness seating (authorised only)
             - Escalate with photos + logs
           options:
             - label: "Escalate"
@@ -349,29 +395,45 @@ faults:
 
         PM_ESC:
           prompt: |
-            *Escalate — Power Module / Stack Fault*
+            *Escalate — Power Modules Offline / Derating (PMC / DPDM)*
             Include:
             - Exact error codes/messages + timestamps
             - Affected cabinet/module/slot
-            - Derate level (kW) / behaviour
-            - Actions attempted (cycle / reseat / swap)
+            - State: unavailable vs derated (kW delivered)
+            - Actions attempted (supply check / cycle / reseat / swap)
             - Firmware version
             - Photos/screenshots
           options:
             - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
-        PM_DONE:
+        PM_DONE_RESOLVED:
           prompt: |
-            *Complete*
-            ✅ Power module troubleshooting complete.
+            ✅ *Resolved*
+            Power module fault cleared and normal output restored.
+            Before leaving:
+            - Confirm stability (no immediate re-fault)
+            - Note what changed (cycle / reseat / swap result)
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        PM_DONE_STAB:
+          prompt: |
+            ⚠️ *Stabilised (Derated)*
+            Charger is operating but with reduced power.
+            Recommended:
+            - Document derate level (kW) + whether stable/fluctuating
+            - Identify affected cabinet/module if possible
+            - Plan follow-up (module/service visit) if derate persists
           options:
             - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
 
   # ============================================================
-  # Other top faults (updated recognition variants where safe)
+  # NO_HEARTBEAT (updated to the version we discussed)
+  # Keep ID stable: kempower_no_heartbeat
   # ============================================================
 
   - id: kempower_no_heartbeat
@@ -399,7 +461,9 @@ faults:
     tags: [network, ethernet, satellite, control_unit, offline]
 
     description: >
-      Satellite/Control Unit is configured but not available on the local network.
+      Satellite/Control Unit is configured but not available on the local network. This can be a single-device
+      issue (24V supply, local ethernet, RJ45 termination) or system-wide (switching, cabinet-to-cabinet links,
+      internal omega board ↔ Ethernet switch, grounding/jumpers in multi-cabinet systems).
 
     decision_tree:
       start_node: KHB0
@@ -453,25 +517,18 @@ faults:
               next: __MENU_KEMPOWER__
 
 
+  # ============================================================
+  # Other top faults (left as-is)
+  # ============================================================
+
   - id: kempower_comm_not_ready
     platform: kempower
     charger_type: dc
     title: "Vehicle Communication Failed (CCS Control Pilot Not Ready)"
 
-    aliases:
-      - "comm not ready"
-      - "ccs not ready"
-      - "control pilot fault"
-      - "COMM_NOT_READY"
-      - "control pilot not ready"
-      - "vehicle communication failed"
+    aliases: ["comm not ready", "ccs not ready", "control pilot fault"]
     triggers:
-      any_text_contains:
-        - "COMM_NOT_READY"
-        - "comm_not_ready"
-        - "comm not ready"
-        - "control pilot not ready"
-        - "ccs not ready"
+      any_text_contains: ["COMM_NOT_READY", "comm_not_ready"]
     severity: high
     tags: [ccs, control_pilot, connector, startup]
 
@@ -534,20 +591,9 @@ faults:
     charger_type: ac
     title: "Earth Leakage Detected (Residual Current Monitor Trip)"
 
-    aliases:
-      - "rcm bad"
-      - "residual current leak"
-      - "earth leakage"
-      - "RCM_BAD"
-      - "residual current monitor tripped"
-      - "earth leakage detected"
+    aliases: ["rcm bad", "residual current leak", "earth leakage"]
     triggers:
-      any_text_contains:
-        - "RCM_BAD"
-        - "rcm_bad"
-        - "rcm bad"
-        - "residual current"
-        - "earth leakage"
+      any_text_contains: ["RCM_BAD", "rcm_bad"]
     severity: high
     tags: [safety, rcd, rcm, earth_leakage, type2]
 
@@ -610,16 +656,9 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Grid Input Stage Communication Fault (AFE Internal Comms)"
-    aliases:
-      - "afe communication error"
-      - "pmc comms bus error"
-      - "AFE_COMMUNICATION_ERROR"
-      - "afe internal comms error"
+    aliases: ["afe communication error", "pmc comms bus error"]
     triggers:
-      any_text_contains:
-        - "AFE_COMMUNICATION_ERROR"
-        - "afe_communication_error"
-        - "afe communication"
+      any_text_contains: ["AFE_COMMUNICATION_ERROR", "afe_communication_error"]
     severity: medium
     tags: [pmc, afe, firmware, comms]
 
@@ -670,18 +709,9 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Cooling Fan Electrical Fault (Fan Current Out of Range)"
-    aliases:
-      - "fan current"
-      - "fan fault"
-      - "thermal performance reduced"
-      - "FAN_CURRENT"
-      - "fan electrical fault"
-      - "fan current error"
+    aliases: ["fan current", "fan fault", "thermal performance reduced"]
     triggers:
-      any_text_contains:
-        - "FAN_CURRENT"
-        - "fan_current"
-        - "fan current"
+      any_text_contains: ["FAN_CURRENT", "fan_current"]
     severity: medium
     tags: [fan, cooling, airflow, firmware, pmc]
 
@@ -744,17 +774,9 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Incoming Supply Too Low (Undervoltage / Phase Issue)"
-    aliases:
-      - "primary undervoltage"
-      - "supply too low"
-      - "PRIMARY_UNDERVOLTAGE"
-      - "supply undervoltage"
+    aliases: ["primary undervoltage", "supply too low"]
     triggers:
-      any_text_contains:
-        - "PRIMARY_UNDERVOLTAGE"
-        - "primary_undervoltage"
-        - "primary undervoltage"
-        - "supply too low"
+      any_text_contains: ["PRIMARY_UNDERVOLTAGE", "primary_undervoltage"]
     severity: high
     tags: [grid, supply, undervoltage, wiring, pmc]
 
@@ -814,19 +836,9 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Electrical Safety Fault Detected (Isolation / Moisture Risk)"
-    aliases:
-      - "rt safety error"
-      - "isolation fault"
-      - "pmc safety error"
-      - "RT_SAFETY_ERROR_IN_THIS_PMC"
-      - "safety error in pmc"
-      - "pmc isolation fault"
+    aliases: ["rt safety error", "isolation fault", "pmc safety error"]
     triggers:
-      any_text_contains:
-        - "RT_SAFETY_ERROR_IN_THIS_PMC"
-        - "rt_safety_error_in_this_pmc"
-        - "safety error"
-        - "isolation fault"
+      any_text_contains: ["RT_SAFETY_ERROR_IN_THIS_PMC", "rt_safety_error_in_this_pmc"]
     severity: critical
     tags: [safety, insulation, isolation, water_ingress, dpdm, maintenance]
 
@@ -877,19 +889,9 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Internal System Fault – Self-Test Failed"
-    aliases:
-      - "ssc selftest internal error"
-      - "self check failed"
-      - "all connectors failed"
-      - "SSC_SELFTEST_INTERNAL_ERROR"
-      - "self test failed"
-      - "system self check failed"
+    aliases: ["ssc selftest internal error", "self check failed", "all connectors failed"]
     triggers:
-      any_text_contains:
-        - "SSC_SELFTEST_INTERNAL_ERROR"
-        - "ssc_selftest_internal_error"
-        - "selftest internal error"
-        - "self test failed"
+      any_text_contains: ["SSC_SELFTEST_INTERNAL_ERROR", "ssc_selftest_internal_error"]
     severity: critical
     tags: [self_check, configuration, canbus, software, dpdm]
 
