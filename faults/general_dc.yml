@@ -546,7 +546,7 @@ faults:
 
 
   # ============================================================
-  # (6) Overtemp / Cooling
+  # (6) Overtemp / Cooling (UPDATED)
   # ============================================================
 
   - id: general_dc_overtemp_cooling_fault
@@ -554,10 +554,40 @@ faults:
     charger_type: dc
     title: "Overtemp / Cooling Fault"
     severity: high
-    tags: [cooling, fans, filters, thermal]
+    tags: [cooling, fans, filters, thermal, derating, airflow]
+
+    aliases:
+      - "overtemp"
+      - "over temp"
+      - "over temperature"
+      - "thermal"
+      - "thermal fault"
+      - "cooling fault"
+      - "fan fault"
+      - "heatsink temp"
+      - "cabinet temp"
+      - "high temp derate"
+      - "temperature alarm"
 
     triggers:
-      any_text_contains: ["overtemp", "thermal", "cooling fault", "fan fault"]
+      any_text_contains:
+        - "overtemp"
+        - "over temp"
+        - "over temperature"
+        - "thermal"
+        - "thermal fault"
+        - "cooling fault"
+        - "fan fault"
+        - "heatsink"
+        - "cabinet temp"
+        - "temperature alarm"
+        - "derate"
+        - "derating"
+        - "low power"
+
+    description: >
+      Thermal alarm or thermal derating. Most common causes are blocked filters/vents and failed/underperforming fans.
+      This tree guides through filters, fans, airflow path, retest, then evidence + escalation.
 
     decision_tree:
       start_node: GD_TH0
@@ -566,40 +596,137 @@ faults:
         GD_TH0:
           prompt: |
             🟫 *Overtemp / Cooling — Start*
-            First: airflow and filters.
+            Quick triage:
+            • Is the charger in direct sun / hot ambient?
+            • Is airflow obviously blocked (grills packed with dust, leaves, plastic, etc)?
+
+            Continue to guided checks.
+          options:
+            - label: "Continue ➡️"
+              next: GD_TH_SAFETY
+
+        GD_TH_SAFETY:
+          prompt: |
+            ✅ *Safety / access*
+            If you need cabinet access:
+            • Follow site procedure / LOTO as required
+            • Fans may start automatically
+            • Keep hands clear of fan blades
+
+            Next: check filters + vents (highest yield).
           options:
             - label: "Continue ➡️"
               next: GD_TH_FILTERS
 
         GD_TH_FILTERS:
           prompt: |
-            *Filters/vents blocked?*
-            Inspect filters/vents for dust blockage.
+            🧼 *Filters / vents / grills*
+            Inspect and clear:
+            • Intake filters / louvers (front/side/bottom depending on unit)
+            • Exhaust grills (rear/top)
+            • Any dust mats, leaves, insects, nests, plastic film, debris
+
+            Action:
+            • Clean/replace filters if blocked
+            • Vacuum grills / clear obstructions
+
+            Were filters/vents dirty or blocked?
           options:
-            - label: "Yes — dirty/blocked"
-              next: GD_TH_RETEST
-            - label: "No — looks OK"
+            - label: "Yes — dirty/blocked (cleaned or will clean now)"
+              next: GD_TH_FANS
+            - label: "No — looks clear"
               next: GD_TH_FANS
 
         GD_TH_FANS:
           prompt: |
-            *Fan check*
-            Confirm fans operate and are unobstructed.
+            🌀 *Fan operation check*
+            Confirm:
+            • Fans are spinning when expected (thermal alarm / under load)
+            • Airflow feels normal (not weak / reversed)
+            • No abnormal noise/vibration
+            • No jammed blades / fouled guards
+            • No loose connectors (authorised only)
+
+            Are all expected fans running normally?
           options:
-            - label: "Fans OK"
+            - label: "Yes — fans OK"
+              next: GD_TH_AIRPATH
+            - label: "No — fan issue / abnormal"
+              next: GD_TH_FAN_ACTIONS
+
+        GD_TH_FAN_ACTIONS:
+          prompt: |
+            🛠️ *Fan issue actions*
+            Do:
+            • Remove debris / unjam blades (if safe)
+            • Reseat fan connector(s) (authorised only)
+            • Check guards not contacting blades
+            • If you can identify a failed fan position, note it clearly
+
+            Next: retest.
+          options:
+            - label: "Continue to retest ➡️"
               next: GD_TH_RETEST
-            - label: "Fan issue"
+
+        GD_TH_AIRPATH:
+          prompt: |
+            🌬️ *Airflow path / cabinet conditions*
+            Check:
+            • Internal air path not blocked by loose insulation / plastic film / debris
+            • Doors/panels seated correctly (some units derate with panels removed)
+            • Hot exhaust not recirculating into intake
+            • Heat exchanger/radiator fins (if applicable) not clogged
+
+            Any issues found?
+          options:
+            - label: "Yes — corrected airflow/path issue"
+              next: GD_TH_RETEST
+            - label: "No — airflow path seems normal"
               next: GD_TH_RETEST
 
         GD_TH_RETEST:
           prompt: |
             🔁 *Retest*
-            Did the fault clear after airflow/fan actions?
+            Steps:
+            • Clear alarm if possible (HMI/reset)
+            • Reboot only if permitted
+            • Start a test session and monitor 5–10 minutes
+
+            Did the fault/derate clear after filter/fan/airflow actions?
           options:
             - label: "Cleared ✅"
-              next: GD_DONE
+              next: GD_TH_MONITOR
             - label: "Still faulting"
+              next: GD_TH_EVIDENCE
+
+        GD_TH_MONITOR:
+          prompt: |
+            ✅ *Monitor*
+            Confirm stability:
+            • No repeat thermal alarms
+            • Fans ramp normally under load
+            • Session sustains without abnormal derating
+
+            If it returns soon, capture evidence and escalate.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_TH_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Overtemp/Cooling*
+            Capture:
+            • Alarm text + timestamp
+            • Ambient temp / sun exposure notes
+            • Photos of filters/grills (before/after)
+            • Which fans running / not running (video if possible)
+            • Any abnormal noise/vibration
+            • Notes on doors/panels seated + airflow path condition
+          options:
+            - label: "Escalate"
               next: GD_ESC
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
 
 
   # ============================================================
@@ -725,35 +852,38 @@ faults:
 
 
   # ============================================================
-  # ROUTES (internal shortcuts used by menu UX)
+  # ROUTES (internal shortcuts used by menu UX) — UPDATED IDs
+  # These IDs MUST match what index.js calls:
+  #   __ROUTE_GENERAL_DC_OFFLINE__
+  #   __ROUTE_GENERAL_DC_OVERTEMP__
   # ============================================================
 
-  - id: __route_general_dc_offline__
+  - id: __ROUTE_GENERAL_DC_OFFLINE__
     platform: general_dc
     charger_type: dc
     title: "__ROUTE: Offline/Comms"
     severity: low
     tags: [route]
     decision_tree:
-      start_node: R0
+      start_node: R_OFF0
       nodes:
-        R0:
+        R_OFF0:
           prompt: |
             Routing to: *Offline / Backend Comms*
           options:
             - label: "Open Offline / Backend Comms"
               next: GD_NET0
 
-  - id: __route_general_dc_overtemp__
+  - id: __ROUTE_GENERAL_DC_OVERTEMP__
     platform: general_dc
     charger_type: dc
     title: "__ROUTE: Overtemp/Cooling"
     severity: low
     tags: [route]
     decision_tree:
-      start_node: R1
+      start_node: R_TH0
       nodes:
-        R1:
+        R_TH0:
           prompt: |
             Routing to: *Overtemp / Cooling Fault*
           options:

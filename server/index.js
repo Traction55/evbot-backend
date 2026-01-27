@@ -18,6 +18,9 @@
  *    dtState = per chat (normal flow)
  *    dtMsgState = per message (old buttons still work)
  *
+ * ✅ FIX: YAML ROUTES working
+ * - Supports __ROUTE_GENERAL_DC_OFFLINE__ and __ROUTE_GENERAL_DC_OVERTEMP__ targets in YAML
+ *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
  *   PUBLIC_URL=https://your-railway-domain.up.railway.app
@@ -471,6 +474,42 @@ function imageKeyToUrl(imageKey) {
 
 async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }) {
   const tree = fault?.decision_tree;
+
+  // ============================
+  // ✅ ROUTE shortcuts (from YAML)
+  // ============================
+  if (nodeId === "__ROUTE_GENERAL_DC_OFFLINE__") {
+    const rf = getFaultById("general_dc", "__ROUTE_GENERAL_DC_OFFLINE__");
+    if (!rf?.decision_tree?.start_node) {
+      return bot.sendMessage(chatId, "⚠️ Route fault missing: Offline/Comms route.");
+    }
+    setDt(chatId, { pack: "general_dc", faultId: rf.id, history: [], messageId: messageId || null });
+    if (messageId) setDtForMessage(chatId, messageId, { pack: "general_dc", faultId: rf.id, history: [] });
+    return renderYamlDecisionNode({
+      chatId,
+      messageId,
+      pack: "general_dc",
+      fault: rf,
+      nodeId: rf.decision_tree.start_node,
+    });
+  }
+
+  if (nodeId === "__ROUTE_GENERAL_DC_OVERTEMP__") {
+    const rf = getFaultById("general_dc", "__ROUTE_GENERAL_DC_OVERTEMP__");
+    if (!rf?.decision_tree?.start_node) {
+      return bot.sendMessage(chatId, "⚠️ Route fault missing: Overtemp/Cooling route.");
+    }
+    setDt(chatId, { pack: "general_dc", faultId: rf.id, history: [], messageId: messageId || null });
+    if (messageId) setDtForMessage(chatId, messageId, { pack: "general_dc", faultId: rf.id, history: [] });
+    return renderYamlDecisionNode({
+      chatId,
+      messageId,
+      pack: "general_dc",
+      fault: rf,
+      nodeId: rf.decision_tree.start_node,
+    });
+  }
+
   const node = tree?.nodes?.[nodeId];
 
   // menu-jump nodes if referenced in YAML
@@ -576,7 +615,9 @@ function formatReportHtml(data) {
 
   const actions = Array.isArray(data.actions) ? data.actions : [];
   const cleanActions = actions.map((a) => stripEmojisForFinal(a)).filter(Boolean);
-  const actionsLines = cleanActions.length ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n") : "• (none recorded)";
+  const actionsLines = cleanActions.length
+    ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n")
+    : "• (none recorded)";
 
   const photos = Array.isArray(data.photos) ? data.photos : [];
   const attachmentsLine = photos.length ? `• Photos uploaded (${photos.length})` : "• None";
@@ -960,7 +1001,7 @@ bot.on("callback_query", async (q) => {
   if (data === "dt:start") {
     const st = getActiveDtState();
     if (!st?.pack || !st?.faultId) {
-      return bot.sendMessage(chatId, "⚠️ No active fault selected. Go back and open a fault first.");
+      return bot.sendMessage(chatId, "⚠️ No active fault selected. Tap a fault first (not just the menu).");
     }
     const fault = getFaultById(st.pack, st.faultId);
     if (!fault?.decision_tree?.start_node) {
