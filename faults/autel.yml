@@ -1,10 +1,12 @@
 # autel.yml
-# EVBot Fault Pack: Autel (On-site Technician v1) — Kempower-style (symptom-first, gated, canonical clusters)
+# EVBot Fault Pack: Autel (On-site Technician v1) — General-DC-style (symptom-first, gated, canonical clusters)
 #
-# Philosophy:
-# - 1–2 gold-standard clusters do the heavy lifting (consistent gates + evidence pack + outcomes)
-# - Individual “fault” entries can stay stable for deep-links but must NOT bounce the tech back to menus
-# - Symptom-first > code-first. Codes route you into the same canonical path.
+# Convention pass (Jan 2026):
+# - Evidence nodes renamed to *_EVIDENCE
+# - Escalation nodes renamed to *_ESC
+# - Resolution nodes renamed to *_DONE
+# - Routing kept inside the same flow (no mid-flow menu bounce)
+# - IDs for fault entries remain stable
 #
 # Notes:
 # - Node-based decision tree: start_node + nodes map
@@ -164,7 +166,7 @@ faults:
             3) Note the *first* fault/message that returns (root clue)
           options:
             - label: "Recovered ✅"
-              next: PS_DONE_RESOLVED
+              next: AUTEL_PS_DONE
             - label: "Still failing"
               next: PS_VISUAL
 
@@ -176,7 +178,7 @@ faults:
             - Harness strain / loose external connectors?
           options:
             - label: "🔥 Unsafe condition found"
-              next: PS_ESC_UNSAFE
+              next: AUTEL_PS_ESC_UNSAFE
             - label: "Looks OK"
               next: PS_SUPPLY_GATE
 
@@ -202,7 +204,7 @@ faults:
             - label: "Supply seems OK → continue"
               next: PS_INTERLOCK_GATE
             - label: "Can’t verify → evidence + escalate"
-              next: PS_LOGS
+              next: AUTEL_PS_EVIDENCE
 
         PS_INTERLOCK_GATE:
           prompt: |
@@ -213,7 +215,7 @@ faults:
             - label: "Interlock cleared → retry"
               next: PS_SAFE_REBOOT
             - label: "Interlock won’t clear"
-              next: PS_LOGS
+              next: AUTEL_PS_EVIDENCE
 
         PS_ISO_GATE:
           prompt: |
@@ -233,7 +235,7 @@ faults:
             - If repeatable across EVs/ports: tag out affected port and escalate
           options:
             - label: "Evidence pack → escalate"
-              next: PS_LOGS
+              next: AUTEL_PS_EVIDENCE
             - label: "Back to Autel menu"
               next: __MENU_AUTEL__
 
@@ -243,13 +245,13 @@ faults:
             Do NOT repeatedly retry. Capture evidence and escalate.
           options:
             - label: "Evidence pack → escalate"
-              next: PS_LOGS
+              next: AUTEL_PS_EVIDENCE
             - label: "Back to Autel menu"
               next: __MENU_AUTEL__
 
-        PS_LOGS:
+        AUTEL_PS_EVIDENCE:
           prompt: |
-            🗂️ *Evidence pack (fast escalation)*
+            🗂️ *Evidence pack — HV Enable / Power-Stage*
             Capture:
             - Exact message/code + timestamp
             - State: start fails vs clicks then faults
@@ -259,11 +261,11 @@ faults:
             - Actions taken (reboot/power cycle)
           options:
             - label: "Escalate"
-              next: PS_ESC
+              next: AUTEL_PS_ESC
             - label: "Back to Autel menu"
               next: __MENU_AUTEL__
 
-        PS_ESC_UNSAFE:
+        AUTEL_PS_ESC_UNSAFE:
           prompt: |
             *⚠️ Escalate immediately — unsafe condition*
             Do NOT re-energise.
@@ -272,7 +274,7 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        PS_ESC:
+        AUTEL_PS_ESC:
           prompt: |
             *Escalate — Autel HV Enable / Power-Stage Start Inhibit*
             Include:
@@ -285,7 +287,7 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        PS_DONE_RESOLVED:
+        AUTEL_PS_DONE:
           prompt: |
             ✅ *Resolved*
             HV start restored. Run a short test session and confirm no recurrence.
@@ -374,7 +376,7 @@ faults:
             Then note the *first* fault that returns.
           options:
             - label: "Recovered ✅"
-              next: AC_DONE
+              next: AUTEL_AC_DONE
             - label: "Still faulting"
               next: AC_VISUAL
 
@@ -386,7 +388,7 @@ faults:
             - Harness strain/loose external connectors?
           options:
             - label: "🔥 Unsafe condition"
-              next: AC_ESC_UNSAFE
+              next: AUTEL_AC_ESC_UNSAFE
             - label: "Looks OK"
               next: AC_SUPPLY
 
@@ -400,7 +402,7 @@ faults:
             - label: "Supply OK / not the issue"
               next: AC_INTERLOCK
             - label: "Can’t verify"
-              next: AC_EVIDENCE
+              next: AUTEL_AC_EVIDENCE
 
         AC_INTERLOCK:
           prompt: |
@@ -412,7 +414,7 @@ faults:
             - label: "Interlock cleared → retry"
               next: AC_REBOOT
             - label: "Interlock won’t clear"
-              next: AC_EVIDENCE
+              next: AUTEL_AC_EVIDENCE
 
         AC_IMD:
           prompt: |
@@ -421,13 +423,13 @@ faults:
             Inspect connector face + cabinet for moisture/contamination/burn marks.
           options:
             - label: "Evidence pack"
-              next: AC_EVIDENCE
+              next: AUTEL_AC_EVIDENCE
             - label: "Back to Autel menu"
               next: __MENU_AUTEL__
 
-        AC_EVIDENCE:
+        AUTEL_AC_EVIDENCE:
           prompt: |
-            🗂️ *Evidence pack (fast escalation)*
+            🗂️ *Evidence pack — AC Contactor / HV Enable path*
             Capture:
             - Exact message/code + timestamp
             - State: start fails vs clicks then faults
@@ -436,11 +438,11 @@ faults:
             - Actions taken (reboot/power cycle)
           options:
             - label: "Escalate"
-              next: AC_ESC
+              next: AUTEL_AC_ESC
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        AC_ESC_UNSAFE:
+        AUTEL_AC_ESC_UNSAFE:
           prompt: |
             *⚠️ Escalate immediately — unsafe condition*
             Do NOT re-energise. Provide photos + what you observed.
@@ -448,7 +450,7 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        AC_ESC:
+        AUTEL_AC_ESC:
           prompt: |
             *Escalate — AC Contactor Fault*
             Include evidence pack + any supply/interlock findings.
@@ -456,7 +458,7 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        AC_DONE:
+        AUTEL_AC_DONE:
           prompt: |
             ✅ *Recovered*
             Run a short test session and confirm no recurrence.
@@ -529,7 +531,7 @@ faults:
             Note the *first* fault that returns.
           options:
             - label: "Recovered ✅"
-              next: DC_DONE
+              next: AUTEL_DC_DONE
             - label: "Still faulting"
               next: DC_VISUAL
 
@@ -541,7 +543,7 @@ faults:
             - Harness strain/loose connectors?
           options:
             - label: "🔥 Unsafe condition"
-              next: DC_ESC_UNSAFE
+              next: AUTEL_DC_ESC_UNSAFE
             - label: "Looks OK"
               next: DC_SUPPLY
 
@@ -555,7 +557,7 @@ faults:
             - label: "Supply OK / not the issue"
               next: DC_INTERLOCK
             - label: "Can’t verify"
-              next: DC_EVIDENCE
+              next: AUTEL_DC_EVIDENCE
 
         DC_INTERLOCK:
           prompt: |
@@ -566,7 +568,7 @@ faults:
             - label: "Interlock cleared → retry"
               next: DC_REBOOT
             - label: "Interlock won’t clear"
-              next: DC_EVIDENCE
+              next: AUTEL_DC_EVIDENCE
 
         DC_IMD:
           prompt: |
@@ -575,13 +577,13 @@ faults:
             Inspect connector face + cabinet for moisture/contamination/burn marks.
           options:
             - label: "Evidence pack"
-              next: DC_EVIDENCE
+              next: AUTEL_DC_EVIDENCE
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        DC_EVIDENCE:
+        AUTEL_DC_EVIDENCE:
           prompt: |
-            🗂️ *Evidence pack (fast escalation)*
+            🗂️ *Evidence pack — DC Contactor / HV Enable path*
             Capture:
             - Exact message/code + timestamp
             - State: start fails vs clicks then faults
@@ -590,11 +592,11 @@ faults:
             - Actions taken (reboot/power cycle)
           options:
             - label: "Escalate"
-              next: DC_ESC
+              next: AUTEL_DC_ESC
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        DC_ESC_UNSAFE:
+        AUTEL_DC_ESC_UNSAFE:
           prompt: |
             *⚠️ Escalate immediately — unsafe condition*
             Do NOT re-energise. Provide photos + what you observed.
@@ -602,7 +604,7 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        DC_ESC:
+        AUTEL_DC_ESC:
           prompt: |
             *Escalate — DC Contactor Failed to Close*
             Include evidence pack + any supply/interlock findings.
@@ -610,7 +612,7 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        DC_DONE:
+        AUTEL_DC_DONE:
           prompt: |
             ✅ *Recovered*
             Run a short test session and confirm no recurrence.
@@ -626,9 +628,9 @@ faults:
   - id: autel_backend_ocpp_comms_fault
     platform: autel
     charger_type: dc
-    title: "Backend / OCPP Communication Fault (Autel DC)"
+    title: "Offline / Backend Comms (Autel DC)"
     severity: high
-    tags: [ocpp, backend, comms, modem, sim, network]
+    tags: [ocpp, network, modem, sim, ethernet, offline]
 
     aliases:
       - "ocpp offline"
@@ -644,108 +646,107 @@ faults:
         - "server offline"
         - "network offline"
         - "charger offline"
+        - "offline"
 
     description: >
-      The charger is offline to the backend (OCPP). Highest success path: confirm scope → controlled reboot →
-      check LTE/Ethernet indicators → basic SIM/APN sanity → evidence pack for backend/OEM.
+      Charger is not connected to backend (OCPP). Highest-yield path: confirm scope → controlled reboot →
+      check link (LTE/Ethernet) → check antenna/SIM/cables → evidence pack → escalate.
 
     decision_tree:
-      start_node: C0
+      start_node: AUTEL_NET0
       nodes:
 
-        C0:
+        AUTEL_NET0:
           prompt: |
-            🌐 *Backend / OCPP offline — Start*
-            Is the site generally online (other chargers OK)?
+            🌐 *Offline / Backend Comms — Start*
+            Is it site-wide (multiple chargers offline) or just this unit?
           options:
-            - label: "Other chargers also offline / site issue likely"
-              next: C_SITE
+            - label: "Multiple chargers offline / site likely"
+              next: AUTEL_NET_SITE
             - label: "Only this charger offline"
-              next: C1
+              next: AUTEL_NET_REBOOT
             - label: "Not sure"
-              next: C1
+              next: AUTEL_NET_REBOOT
 
-        C_SITE:
+        AUTEL_NET_SITE:
           prompt: |
-            *Site-wide comms issue likely*
-            - Check upstream router/modem power
-            - Check site WAN
-            - Capture timestamps + site notes
+            *Site gate*
+            - Check router/WAN status if accessible
+            - Note site outage indicators
           options:
-            - label: "Controlled reboot after site checks"
-              next: C1
+            - label: "Reboot charger after site checks"
+              next: AUTEL_NET_REBOOT
             - label: "Evidence pack"
-              next: C_EVIDENCE
+              next: AUTEL_NET_EVIDENCE
 
-        C1:
+        AUTEL_NET_REBOOT:
           prompt: |
-            *Controlled reboot / power cycle*
-            Reboot and allow time for modem registration and OCPP handshake.
+            🔁 *Controlled reboot*
+            Reboot/power cycle and wait for registration/OCPP handshake.
           options:
-            - label: "Recovered (online) ✅"
-              next: C_DONE
+            - label: "Recovered ✅"
+              next: AUTEL_NET_DONE
             - label: "Still offline"
-              next: C2
+              next: AUTEL_NET_LINKTYPE
 
-        C2:
+        AUTEL_NET_LINKTYPE:
           prompt: |
-            *Quick link checks*
-            What connection type is in use?
+            *Connection type?*
           options:
             - label: "📶 Cellular/LTE"
-              next: C_LTE
+              next: AUTEL_NET_LTE
             - label: "🔌 Ethernet"
-              next: C_ETH
+              next: AUTEL_NET_ETH
             - label: "❓ Not sure"
-              next: C_EVIDENCE
+              next: AUTEL_NET_EVIDENCE
 
-        C_LTE:
+        AUTEL_NET_LTE:
           prompt: |
-            *LTE checks*
-            - Check antenna seated and not damaged
-            - Check signal indicator (if available)
-            - If permitted: reseat SIM, confirm correct APN profile
+            📶 *LTE checks*
+            - Antenna seated/tight, cable not damaged
+            - If permitted: reseat SIM
+            - Note signal indicators if shown
           options:
-            - label: "Retest after LTE checks"
-              next: C1
+            - label: "Retest"
+              next: AUTEL_NET_REBOOT
             - label: "Evidence pack"
-              next: C_EVIDENCE
+              next: AUTEL_NET_EVIDENCE
 
-        C_ETH:
+        AUTEL_NET_ETH:
           prompt: |
-            *Ethernet checks*
-            - Link lights present?
+            🔌 *Ethernet checks*
+            - Link lights?
             - Reseat cable at charger and switch
             - Try alternate port/cable if permitted
           options:
-            - label: "Retest after Ethernet checks"
-              next: C1
+            - label: "Retest"
+              next: AUTEL_NET_REBOOT
             - label: "Evidence pack"
-              next: C_EVIDENCE
+              next: AUTEL_NET_EVIDENCE
 
-        C_EVIDENCE:
+        AUTEL_NET_EVIDENCE:
           prompt: |
-            🗂️ *Evidence pack (backend/OEM)*
+            🗂️ *Evidence pack — Offline*
             Capture:
             - Offline message + timestamp
-            - Connection type (LTE/Ethernet)
-            - Signal strength / link lights (if known)
-            - SIM/APN notes (if checked)
+            - Link type (LTE/Ethernet)
+            - Antenna/cable/SIM actions performed
+            - Any signal/link indicators
           options:
             - label: "Escalate"
-              next: C_ESC
+              next: AUTEL_NET_ESC
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        C_ESC:
+        AUTEL_NET_ESC:
           prompt: |
-            *Escalate — Backend/OCPP*
-            Include: last known online time, timestamps, link type, and what was tried (reboot/cables/antenna/SIM/APN).
+            *Escalate — Offline / Backend Comms*
+            Include evidence pack + last known online time + what you tried (reboot/cables/antenna/SIM).
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        C_DONE:
+        AUTEL_NET_DONE:
           prompt: |
             ✅ *Recovered*
             Confirm stable backend connection (no repeated dropouts).
@@ -761,103 +762,171 @@ faults:
   - id: autel_overtemp_cooling_fault
     platform: autel
     charger_type: dc
-    title: "Overtemperature / Cooling Fault (Autel DC)"
+    title: "Overtemp / Cooling Fault (Autel DC)"
     severity: high
-    tags: [cooling, overtemp, fans, filters]
+    tags: [cooling, fans, filters, thermal, derating, airflow]
 
     aliases:
       - "overtemp"
       - "over temperature"
+      - "thermal"
       - "thermal fault"
       - "fan fault"
       - "cooling fault"
+      - "overheat"
+      - "derate"
+      - "derating"
+      - "low power"
 
     triggers:
       any_text_contains:
         - "overtemp"
         - "over temperature"
+        - "thermal"
         - "thermal fault"
         - "fan fault"
         - "cooling fault"
         - "overheat"
+        - "derate"
+        - "derating"
+        - "low power"
 
     description: >
-      Overtemperature indicates thermal limits exceeded or inadequate cooling detected. Fastest wins are filters/airflow,
-      fan operation, and site ventilation. Escalate with evidence if persistent.
+      Thermal alarm or thermal derating. Most common causes are blocked filters/vents and failed/underperforming fans.
+      This flow matches General DC: Safety → Filters/Vents → Fans → Air path → Retest → Evidence → Escalate → Done.
 
     decision_tree:
-      start_node: T0
+      start_node: AUTEL_TH0
       nodes:
-        T0:
+
+        AUTEL_TH0:
           prompt: |
-            🟫 *Overtemperature / Cooling — Start*
-            First: airflow and filters.
-          image: autel/cooling_filters_location
+            🟫 *Overtemp / Cooling — Start*
+            Quick triage:
+            • Is the charger in direct sun / hot ambient?
+            • Is airflow obviously blocked (grills packed with dust, leaves, plastic, etc)?
           options:
             - label: "Continue ➡️"
-              next: T1
+              next: AUTEL_TH_SAFETY
 
-        T1:
+        AUTEL_TH_SAFETY:
           prompt: |
-            *Filters/vents blocked?*
-            Inspect filters/vents for dust blockage and cabinet airflow.
+            ✅ *Safety / access*
+            If cabinet access is required:
+            • Follow site procedure / LOTO as required
+            • Fans may start automatically
+            • Keep hands clear of fan blades
+          options:
+            - label: "Continue ➡️"
+              next: AUTEL_TH_FILTERS
+
+        AUTEL_TH_FILTERS:
+          prompt: |
+            🧼 *Filters / vents / grills*
+            Inspect and clear:
+            • Intake filters / louvers
+            • Exhaust grills
+            • Dust mats, leaves, insects, nests, plastic film, debris
+            Action:
+            • Clean/replace filters if blocked
+            • Vacuum grills / clear obstructions
+            Were filters/vents dirty or blocked?
           image: autel/cooling_filters_location
           options:
-            - label: "Yes — blocked/dirty"
-              next: T_FIX_FILTERS
-            - label: "No — looks OK"
-              next: T2
+            - label: "Yes — dirty/blocked (cleaned or will clean now)"
+              next: AUTEL_TH_FANS
+            - label: "No — looks clear"
+              next: AUTEL_TH_FANS
 
-        T_FIX_FILTERS:
+        AUTEL_TH_FANS:
           prompt: |
-            *Clean/replace filters*
-            Clean/replace filters then retest under load.
-          image: autel/cooling_filters_location
-          options:
-            - label: "Retest"
-              next: T2
-
-        T2:
-          prompt: |
-            *Fan check*
-            Confirm fans are operating and unobstructed.
+            🌀 *Fan operation check*
+            Confirm:
+            • Fans are spinning when expected (thermal alarm / under load)
+            • Airflow feels normal (not weak / reversed)
+            • No abnormal noise/vibration
+            • No jammed blades / fouled guards
+            • No loose connectors (authorised only)
+            Are all expected fans running normally?
           image: autel/cooling_fan_location
           options:
-            - label: "Fans OK"
-              next: T_DONE_OR_ESC
-            - label: "Fan not running / blocked"
-              next: T_FIX_FANS
+            - label: "Yes — fans OK"
+              next: AUTEL_TH_AIRPATH
+            - label: "No — fan issue / abnormal"
+              next: AUTEL_TH_FAN_ACTIONS
 
-        T_FIX_FANS:
+        AUTEL_TH_FAN_ACTIONS:
           prompt: |
-            *Fix fan issue*
-            Clear obstruction, check fan connector/power, replace fan if failed. Then retest.
-          image: autel/cooling_fan_location
+            🛠️ *Fan issue actions*
+            Do:
+            • Remove debris / unjam blades (if safe)
+            • Reseat fan connector(s) (authorised only)
+            • Check guards not contacting blades
+            • If you can identify a failed fan position, note it clearly
           options:
-            - label: "Retest"
-              next: T_DONE_OR_ESC
+            - label: "Continue to retest ➡️"
+              next: AUTEL_TH_RETEST
 
-        T_DONE_OR_ESC:
+        AUTEL_TH_AIRPATH:
           prompt: |
-            Did the fault clear after airflow/fan actions?
+            🌬️ *Airflow path / cabinet conditions*
+            Check:
+            • Internal air path not blocked (loose insulation / plastic film / debris)
+            • Doors/panels seated correctly
+            • Hot exhaust not recirculating into intake
+            • Heat exchanger/radiator fins (if applicable) not clogged
+            Any issues found?
+          options:
+            - label: "Yes — corrected airflow/path issue"
+              next: AUTEL_TH_RETEST
+            - label: "No — airflow path seems normal"
+              next: AUTEL_TH_RETEST
+
+        AUTEL_TH_RETEST:
+          prompt: |
+            🔁 *Retest*
+            Steps:
+            • Clear alarm if possible (HMI/reset)
+            • Reboot only if permitted
+            • Start a test session and monitor 5–10 minutes
+            Did the fault/derate clear after filter/fan/airflow actions?
           options:
             - label: "Cleared ✅"
-              next: T_DONE
+              next: AUTEL_TH_DONE
             - label: "Still faulting"
-              next: T_ESC
+              next: AUTEL_TH_EVIDENCE
 
-        T_ESC:
+        AUTEL_TH_EVIDENCE:
           prompt: |
-            *Escalate — Overtemperature*
-            Include: ambient temp, filter condition, fan status, and timestamps.
+            🗂️ *Evidence pack — Overtemp/Cooling*
+            Capture:
+            • Alarm text + timestamp
+            • Ambient temp / sun exposure notes
+            • Photos of filters/grills (before/after)
+            • Which fans running / not running (video if possible)
+            • Any abnormal noise/vibration
+            • Notes on doors/panels seated + airflow path condition
+          options:
+            - label: "Escalate"
+              next: AUTEL_TH_ESC
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        AUTEL_TH_ESC:
+          prompt: |
+            *Escalate — Overtemp/Cooling*
+            Include evidence pack + what you tried (filters/fans/airflow/retest).
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        T_DONE:
+        AUTEL_TH_DONE:
           prompt: |
             ✅ *Resolved*
-            Run a short test session and confirm no recurrence.
+            Confirm stability:
+            • No repeat thermal alarms
+            • Fans ramp normally under load
+            • Session sustains without abnormal derating
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
@@ -889,7 +958,7 @@ faults:
 
     description: >
       First action is reseat to eliminate poor seating/connection. If the symptom also includes start inhibit,
-      precharge/DC bus/contactor messages, you should use the canonical HV Enable / Power-Stage cluster.
+      precharge/DC bus/contactor messages, use the canonical HV Enable / Power-Stage cluster.
 
     decision_tree:
       start_node: PM0
@@ -918,28 +987,42 @@ faults:
             Did the module return online?
           options:
             - label: "Resolved ✅"
-              next: PM_DONE
+              next: AUTEL_PM_DONE
             - label: "Still offline"
-              next: PM_ESC
+              next: AUTEL_PM_EVIDENCE
 
         PM_ROUTE_CLUSTER:
           prompt: |
-            Use canonical flow:
+            Routing to canonical flow:
             *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
-            (It includes gates + evidence pack for fastest resolution.)
           options:
             - label: "Open HV Enable cluster"
               next: PS0
 
-        PM_ESC:
+        AUTEL_PM_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Power Module Offline*
+            Capture:
+            - Which module/slot (if known)
+            - Any module LEDs / indicators
+            - Actions taken (reseat)
+            - Timestamps and photos
+            - Whether charging possible at reduced power
+          options:
+            - label: "Escalate"
+              next: AUTEL_PM_ESC
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        AUTEL_PM_ESC:
           prompt: |
             *Escalate — Power Module Offline*
-            Include: which module/slot (if known), LEDs, actions (reseat), and timestamps.
+            Include evidence pack + whether reseat changed behaviour.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        PM_DONE:
+        AUTEL_PM_DONE:
           prompt: |
             ✅ *Resolved*
             Run a short test session and confirm stable operation.
@@ -949,7 +1032,7 @@ faults:
 
 
   # ============================================================
-  # (7) TCU Communication Error (expanded)
+  # (7) TCU Communication Error (expanded; convention aligned)
   # ============================================================
 
   - id: autel_tcu_communication_error
@@ -983,54 +1066,46 @@ faults:
       antenna and harness seating, then isolate network vs hardware.
 
     decision_tree:
-      start_node: TCU0
+      start_node: AUTEL_TCU0
       nodes:
 
-        TCU0:
+        AUTEL_TCU0:
           prompt: |
             📡 *TCU Communication Error — Start*
             Is the charger also showing OCPP/backend offline?
           options:
             - label: "✅ Yes (offline as well)"
-              next: TCU1
+              next: AUTEL_TCU_REBOOT
             - label: "❌ No (charging works / backend ok)"
-              next: TCU2
+              next: AUTEL_TCU_LED_CHECK
             - label: "Not sure"
-              next: TCU1
+              next: AUTEL_TCU_REBOOT
 
-        TCU1:
+        AUTEL_TCU_REBOOT:
           prompt: |
-            *Controlled reboot first*
+            🔁 *Controlled reboot first*
             Reboot via HMI/service menu if available; otherwise controlled power cycle.
             Then check if the alarm returns.
           options:
             - label: "Recovered ✅"
-              next: TCU_MONITOR
+              next: AUTEL_TCU_DONE
             - label: "Still faulting"
-              next: TCU_LED_CHECK
+              next: AUTEL_TCU_LED_CHECK
 
-        TCU2:
-          prompt: |
-            *Alarm but service seems OK*
-            Treat as intermittent comms/harness/TCU stability issue. Proceed to physical sanity checks.
-          options:
-            - label: "Continue ➡️"
-              next: TCU_LED_CHECK
-
-        TCU_LED_CHECK:
+        AUTEL_TCU_LED_CHECK:
           prompt: |
             💡 *TCU LED / status check*
             Observe TCU indicators (power/status/network) if accessible.
             What do you see?
           options:
             - label: "No LEDs / dead"
-              next: TCU_POWER_HARNESS
+              next: AUTEL_TCU_POWER_HARNESS
             - label: "LEDs on but abnormal (no network / stuck pattern)"
-              next: TCU_ANTENNA
+              next: AUTEL_TCU_ANTENNA
             - label: "LEDs normal but alarm persists"
-              next: TCU_BACKEND_ALIGN
+              next: AUTEL_TCU_NETWORK_ALIGN
 
-        TCU_POWER_HARNESS:
+        AUTEL_TCU_POWER_HARNESS:
           prompt: |
             🔌 *Power + harness seating*
             - Check harness connectors are fully seated/latched (controller ↔ TCU)
@@ -1038,11 +1113,11 @@ faults:
             - If permitted: confirm TCU supply present (control power integrity)
           options:
             - label: "Retest after reseat"
-              next: TCU1
+              next: AUTEL_TCU_REBOOT
             - label: "Still faulting"
-              next: TCU_ANTENNA
+              next: AUTEL_TCU_ANTENNA
 
-        TCU_ANTENNA:
+        AUTEL_TCU_ANTENNA:
           prompt: |
             📶 *Antenna sanity*
             - Confirm antenna is connected tightly at the TCU
@@ -1050,11 +1125,11 @@ faults:
             - If you have a known-good antenna: swap to test
           options:
             - label: "Retest after antenna checks"
-              next: TCU1
+              next: AUTEL_TCU_REBOOT
             - label: "Still faulting"
-              next: TCU_BACKEND_ALIGN
+              next: AUTEL_TCU_NETWORK_ALIGN
 
-        TCU_BACKEND_ALIGN:
+        AUTEL_TCU_NETWORK_ALIGN:
           prompt: |
             🌐 *Network alignment*
             If TCU appears alive but comms persist:
@@ -1063,11 +1138,11 @@ faults:
             - Confirm time sync/DNS not obviously wrong (if visible)
           options:
             - label: "Evidence pack"
-              next: TCU_EVIDENCE
+              next: AUTEL_TCU_EVIDENCE
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        TCU_EVIDENCE:
+        AUTEL_TCU_EVIDENCE:
           prompt: |
             🗂️ *Evidence pack — TCU*
             Capture:
@@ -1077,11 +1152,11 @@ faults:
             - Whether backend/offline was also present
           options:
             - label: "Escalate"
-              next: TCU_ESC
+              next: AUTEL_TCU_ESC
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        TCU_ESC:
+        AUTEL_TCU_ESC:
           prompt: |
             *Escalate — TCU Communication Error*
             Include evidence pack + whether a known-good antenna/harness reseat changed behaviour.
@@ -1089,9 +1164,9 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
-        TCU_MONITOR:
+        AUTEL_TCU_DONE:
           prompt: |
-            ✅ *Monitor*
+            ✅ *Recovered*
             Confirm stability (no repeated offline/TCU alarms).
           options:
             - label: "Autel menu"
