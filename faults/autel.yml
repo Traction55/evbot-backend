@@ -3,7 +3,7 @@
 #
 # Philosophy:
 # - 1–2 gold-standard clusters do the heavy lifting (consistent gates + evidence pack + outcomes)
-# - Individual “fault” entries often act as ROUTERS (IDs stay stable for deep-links)
+# - Individual “fault” entries can stay stable for deep-links but must NOT bounce the tech back to menus
 # - Symptom-first > code-first. Codes route you into the same canonical path.
 #
 # Notes:
@@ -65,6 +65,7 @@ faults:
         - "dc contactor"
         - "failed to close"
         - "contactor failed"
+        - "verify failed"
         - "welded contactor"
         - "ac contactor"
         - "input contactor"
@@ -234,7 +235,7 @@ faults:
             - label: "Evidence pack → escalate"
               next: PS_LOGS
             - label: "Back to Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         PS_DC_BUS_OV:
           prompt: |
@@ -244,7 +245,7 @@ faults:
             - label: "Evidence pack → escalate"
               next: PS_LOGS
             - label: "Back to Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         PS_LOGS:
           prompt: |
@@ -260,7 +261,7 @@ faults:
             - label: "Escalate"
               next: PS_ESC
             - label: "Back to Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         PS_ESC_UNSAFE:
           prompt: |
@@ -269,7 +270,7 @@ faults:
             Provide photos + what you observed (smell/heat/water ingress).
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         PS_ESC:
           prompt: |
@@ -282,7 +283,7 @@ faults:
             - Actions taken (reboot/power cycle)
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         PS_DONE_RESOLVED:
           prompt: |
@@ -290,19 +291,19 @@ faults:
             HV start restored. Run a short test session and confirm no recurrence.
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
 
   # ============================================================
-  # (2) ROUTER: AC Contactor Fault (ID stable → routes into cluster)
+  # (2) UX-FIXED ROUTED ENTRY: AC Contactor Fault (ID stable; no menu bounce)
   # ============================================================
 
   - id: autel_ac_contactor_fault
     platform: autel
     charger_type: dc
-    title: "AC Contactor Fault (Autel DC) — Routed to HV Enable Cluster"
+    title: "AC Contactor Fault (Autel DC)"
     severity: high
-    tags: [power, input, contactor, routed, hv_enable, start_inhibit]
+    tags: [power, input, contactor, hv_enable, start_inhibit, interlock, supply]
 
     aliases:
       - "AC Contactor Fault"
@@ -325,40 +326,162 @@ faults:
         - "input relay"
 
     description: >
-      Routed fault: AC contactor alarms commonly share root causes with the HV enable sequence (supply stability,
-      interlocks/HVIL, IMD/isolation gating, and contactor/DC bus verification). Use the canonical cluster.
+      AC contactor alarms are usually part of the HV enable/start sequence (supply stability + interlocks/HVIL + control power).
+      This entry embeds the canonical gates so the tech never has to back out to a different menu item.
+
+    safety_notes:
+      - LOTO before opening cabinets; wait minimum 5 minutes for DC bus discharge
+      - Do not bypass interlocks/HVIL
 
     decision_tree:
-      start_node: RAC0
+      start_node: AC0
       nodes:
-        RAC0:
-          prompt: |
-            ⚡ *AC Contactor Fault (Autel) — Routed*
-            This is handled by the canonical flow:
-            *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
 
-            Open that fault and follow the symptom-first gates.
+        AC0:
+          prompt: |
+            ⚡ *Autel — AC Contactor Fault (Field Flow)*
+            Start symptom-first. What are you seeing?
           options:
-            - label: "🏠 Autel menu (open HV Enable cluster)"
-              next: "__MENU_AUTEL__"
+            - label: "🚫 Won’t start / fails immediately"
+              next: AC_PATTERN_FAIL
+            - label: "⚠️ Clicks/tries then faults"
+              next: AC_REBOOT
+            - label: "⬛ Interlock/HVIL/E-stop indicated"
+              next: AC_INTERLOCK
+            - label: "🔌 Supply issue suspected (undervoltage/phase)"
+              next: AC_SUPPLY
+            - label: "🟪 IMD/Isolation alarm appears"
+              next: AC_IMD
+            - label: "🔎 Not sure"
+              next: AC_REBOOT
+
+        AC_PATTERN_FAIL:
+          prompt: |
+            *Pattern — Start fails*
+            Do you see any explicit block reason?
+          options:
+            - label: "Interlock/HVIL/E-stop"
+              next: AC_INTERLOCK
+            - label: "Supply/undervoltage/phase"
+              next: AC_SUPPLY
+            - label: "No clear reason"
+              next: AC_REBOOT
+
+        AC_REBOOT:
+          prompt: |
+            ✅ *Clean recovery step*
+            Do a controlled reboot/power cycle ONCE.
+            Then note the *first* fault that returns.
+          options:
+            - label: "Recovered ✅"
+              next: AC_DONE
+            - label: "Still faulting"
+              next: AC_VISUAL
+
+        AC_VISUAL:
+          prompt: |
+            👀 *Visual check (non-invasive)*
+            - Burnt smell/heat/discoloration?
+            - Water ingress/wet marks?
+            - Harness strain/loose external connectors?
+          options:
+            - label: "🔥 Unsafe condition"
+              next: AC_ESC_UNSAFE
+            - label: "Looks OK"
+              next: AC_SUPPLY
+
+        AC_SUPPLY:
+          prompt: |
+            ⚡ *Supply gate*
+            Check upstream isolator/CB. If authorised: confirm L-L voltages present and not sagging badly at enable.
+          options:
+            - label: "Supply corrected → retry"
+              next: AC_REBOOT
+            - label: "Supply OK / not the issue"
+              next: AC_INTERLOCK
+            - label: "Can’t verify"
+              next: AC_EVIDENCE
+
+        AC_INTERLOCK:
+          prompt: |
+            ⬛ *Interlock / HVIL gate*
+            If any interlock is open, AC contactor/HV enable can be inhibited.
+            Clear interlocks before chasing parts.
+          image: autel/interlock_chain_points
+          options:
+            - label: "Interlock cleared → retry"
+              next: AC_REBOOT
+            - label: "Interlock won’t clear"
+              next: AC_EVIDENCE
+
+        AC_IMD:
+          prompt: |
+            🟪 *IMD/Isolation appeared*
+            Treat as safety critical. Avoid repeated attempts.
+            Inspect connector face + cabinet for moisture/contamination/burn marks.
+          options:
+            - label: "Evidence pack"
+              next: AC_EVIDENCE
+            - label: "Back to Autel menu"
+              next: __MENU_AUTEL__
+
+        AC_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack (fast escalation)*
+            Capture:
+            - Exact message/code + timestamp
+            - State: start fails vs clicks then faults
+            - Supply notes (alarms / measured L-L if available)
+            - Interlock/HVIL status
+            - Actions taken (reboot/power cycle)
+          options:
+            - label: "Escalate"
+              next: AC_ESC
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        AC_ESC_UNSAFE:
+          prompt: |
+            *⚠️ Escalate immediately — unsafe condition*
+            Do NOT re-energise. Provide photos + what you observed.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        AC_ESC:
+          prompt: |
+            *Escalate — AC Contactor Fault*
+            Include evidence pack + any supply/interlock findings.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        AC_DONE:
+          prompt: |
+            ✅ *Recovered*
+            Run a short test session and confirm no recurrence.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
   # ============================================================
-  # (3) ROUTER: DC Contactor Fault (ID stable → routes into cluster)
+  # (3) UX-FIXED ROUTED ENTRY: DC Contactor Fault (ID stable; no menu bounce)
   # ============================================================
 
   - id: autel_dc_contactor_fault
     platform: autel
     charger_type: dc
-    title: "DC Contactor Fault / Failed to Close (Autel DC) — Routed"
+    title: "DC Contactor Fault / Failed to Close (Autel DC)"
     severity: high
-    tags: [dc, contactor, output, routed, hv_enable, start_inhibit]
+    tags: [dc, contactor, hv_enable, start_inhibit, interlock, supply, precharge]
 
     aliases:
       - "DC Contactor Fault"
       - "output contactor fault"
       - "failed to close"
       - "contactor verify failed"
+      - "verify failed"
       - "welded contactor"
 
     triggers:
@@ -370,22 +493,130 @@ faults:
         - "welded contactor"
 
     description: >
-      Routed fault: DC contactor verification failures are part of the HV enable start sequence.
-      Use the canonical HV Enable / Power-Stage cluster to avoid duplicated steps.
+      DC contactor faults are typically part of the HV enable/start sequence (precharge/DC bus/verification).
+      This entry embeds the canonical gates so the tech stays in one flow.
+
+    safety_notes:
+      - LOTO before opening cabinets; wait minimum 5 minutes for DC bus discharge
+      - If IMD/isolation appears, stop repeated attempts and escalate
 
     decision_tree:
-      start_node: RDC0
+      start_node: DC0
       nodes:
-        RDC0:
-          prompt: |
-            🟥 *DC Contactor Fault — Routed*
-            Use the canonical flow:
-            *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
 
-            Open that fault and follow the gates (supply → interlock → IMD → evidence).
+        DC0:
+          prompt: |
+            🟥 *Autel — DC Contactor Failed to Close (Field Flow)*
+            Start symptom-first. What are you seeing?
           options:
-            - label: "🏠 Autel menu (open HV Enable cluster)"
-              next: "__MENU_AUTEL__"
+            - label: "🚫 Start fails immediately"
+              next: DC_REBOOT
+            - label: "⚠️ Clicks then faults"
+              next: DC_REBOOT
+            - label: "⬛ Interlock/HVIL/E-stop indicated"
+              next: DC_INTERLOCK
+            - label: "🔌 Supply issue suspected"
+              next: DC_SUPPLY
+            - label: "🟪 IMD/Isolation alarm appears"
+              next: DC_IMD
+            - label: "🔎 Not sure"
+              next: DC_REBOOT
+
+        DC_REBOOT:
+          prompt: |
+            ✅ *Clean recovery step*
+            Controlled reboot/power cycle ONCE.
+            Note the *first* fault that returns.
+          options:
+            - label: "Recovered ✅"
+              next: DC_DONE
+            - label: "Still faulting"
+              next: DC_VISUAL
+
+        DC_VISUAL:
+          prompt: |
+            👀 *Visual check (non-invasive)*
+            - Burnt smell/heat/discoloration?
+            - Water ingress/wet marks?
+            - Harness strain/loose connectors?
+          options:
+            - label: "🔥 Unsafe condition"
+              next: DC_ESC_UNSAFE
+            - label: "Looks OK"
+              next: DC_SUPPLY
+
+        DC_SUPPLY:
+          prompt: |
+            ⚡ *Supply gate*
+            Check upstream isolator/CB. If authorised: confirm L-L voltages present and stable at enable.
+          options:
+            - label: "Supply corrected → retry"
+              next: DC_REBOOT
+            - label: "Supply OK / not the issue"
+              next: DC_INTERLOCK
+            - label: "Can’t verify"
+              next: DC_EVIDENCE
+
+        DC_INTERLOCK:
+          prompt: |
+            ⬛ *Interlock / HVIL gate*
+            If any interlock is open, HV enable/precharge/contactors can be inhibited.
+          image: autel/interlock_chain_points
+          options:
+            - label: "Interlock cleared → retry"
+              next: DC_REBOOT
+            - label: "Interlock won’t clear"
+              next: DC_EVIDENCE
+
+        DC_IMD:
+          prompt: |
+            🟪 *IMD/Isolation appeared*
+            Treat as safety critical. Avoid repeated attempts.
+            Inspect connector face + cabinet for moisture/contamination/burn marks.
+          options:
+            - label: "Evidence pack"
+              next: DC_EVIDENCE
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        DC_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack (fast escalation)*
+            Capture:
+            - Exact message/code + timestamp
+            - State: start fails vs clicks then faults
+            - Supply notes (alarms / measured L-L if available)
+            - Interlock/HVIL status
+            - Actions taken (reboot/power cycle)
+          options:
+            - label: "Escalate"
+              next: DC_ESC
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        DC_ESC_UNSAFE:
+          prompt: |
+            *⚠️ Escalate immediately — unsafe condition*
+            Do NOT re-energise. Provide photos + what you observed.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        DC_ESC:
+          prompt: |
+            *Escalate — DC Contactor Failed to Close*
+            Include evidence pack + any supply/interlock findings.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        DC_DONE:
+          prompt: |
+            ✅ *Recovered*
+            Run a short test session and confirm no recurrence.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
 
   # ============================================================
@@ -409,14 +640,14 @@ faults:
     triggers:
       any_text_contains:
         - "ocpp"
-        - "offline"
         - "backend offline"
-        - "server"
+        - "server offline"
         - "network offline"
+        - "charger offline"
 
     description: >
-      The charger is offline to the backend (OCPP). The highest success path is: confirm state → controlled reboot →
-      check signal/link indicators → basic SIM/APN sanity → capture evidence for backend/OEM.
+      The charger is offline to the backend (OCPP). Highest success path: confirm scope → controlled reboot →
+      check LTE/Ethernet indicators → basic SIM/APN sanity → evidence pack for backend/OEM.
 
     decision_tree:
       start_node: C0
@@ -425,7 +656,7 @@ faults:
         C0:
           prompt: |
             🌐 *Backend / OCPP offline — Start*
-            Confirm offline state. Is the site generally online (other chargers ok)?
+            Is the site generally online (other chargers OK)?
           options:
             - label: "Other chargers also offline / site issue likely"
               next: C_SITE
@@ -443,8 +674,8 @@ faults:
           options:
             - label: "Controlled reboot after site checks"
               next: C1
-            - label: "Escalate with evidence"
-              next: C_ESC
+            - label: "Evidence pack"
+              next: C_EVIDENCE
 
         C1:
           prompt: |
@@ -504,7 +735,7 @@ faults:
             - label: "Escalate"
               next: C_ESC
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         C_ESC:
           prompt: |
@@ -512,7 +743,7 @@ faults:
             Include: last known online time, timestamps, link type, and what was tried (reboot/cables/antenna/SIM/APN).
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         C_DONE:
           prompt: |
@@ -520,7 +751,7 @@ faults:
             Confirm stable backend connection (no repeated dropouts).
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
 
   # ============================================================
@@ -539,14 +770,16 @@ faults:
       - "over temperature"
       - "thermal fault"
       - "fan fault"
+      - "cooling fault"
 
     triggers:
       any_text_contains:
         - "overtemp"
         - "over temperature"
-        - "thermal"
+        - "thermal fault"
         - "fan fault"
         - "cooling fault"
+        - "overheat"
 
     description: >
       Overtemperature indicates thermal limits exceeded or inadequate cooling detected. Fastest wins are filters/airflow,
@@ -619,7 +852,7 @@ faults:
             Include: ambient temp, filter condition, fan status, and timestamps.
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         T_DONE:
           prompt: |
@@ -627,7 +860,7 @@ faults:
             Run a short test session and confirm no recurrence.
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
 
   # ============================================================
@@ -655,8 +888,8 @@ faults:
         - "power module fault"
 
     description: >
-      First action is reseat to eliminate poor seating/connection. If the site symptom also includes start inhibit,
-      precharge/DC bus/contactor messages, route into the canonical HV Enable / Power-Stage cluster.
+      First action is reseat to eliminate poor seating/connection. If the symptom also includes start inhibit,
+      precharge/DC bus/contactor messages, you should use the canonical HV Enable / Power-Stage cluster.
 
     decision_tree:
       start_node: PM0
@@ -695,8 +928,8 @@ faults:
             *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
             (It includes gates + evidence pack for fastest resolution.)
           options:
-            - label: "🏠 Autel menu (open HV Enable cluster)"
-              next: "__MENU_AUTEL__"
+            - label: "Open HV Enable cluster"
+              next: PS0
 
         PM_ESC:
           prompt: |
@@ -704,7 +937,7 @@ faults:
             Include: which module/slot (if known), LEDs, actions (reseat), and timestamps.
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         PM_DONE:
           prompt: |
@@ -712,11 +945,11 @@ faults:
             Run a short test session and confirm stable operation.
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
 
   # ============================================================
-  # (7) TCU Communication Error (expanded per your request)
+  # (7) TCU Communication Error (expanded)
   # ============================================================
 
   - id: autel_tcu_communication_error
@@ -831,8 +1064,8 @@ faults:
           options:
             - label: "Evidence pack"
               next: TCU_EVIDENCE
-            - label: "Back to Autel menu"
-              next: "__MENU_AUTEL__"
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
 
         TCU_EVIDENCE:
           prompt: |
@@ -846,7 +1079,7 @@ faults:
             - label: "Escalate"
               next: TCU_ESC
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         TCU_ESC:
           prompt: |
@@ -854,7 +1087,7 @@ faults:
             Include evidence pack + whether a known-good antenna/harness reseat changed behaviour.
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
 
         TCU_MONITOR:
           prompt: |
@@ -862,4 +1095,4 @@ faults:
             Confirm stability (no repeated offline/TCU alarms).
           options:
             - label: "Autel menu"
-              next: "__MENU_AUTEL__"
+              next: __MENU_AUTEL__
