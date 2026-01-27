@@ -1,115 +1,753 @@
 # autel.yml
-# EVBot Fault Pack: Autel (On-site Technician v1) — Descriptive + Tuned (nodes-based)
+# EVBot Fault Pack: Autel (On-site Technician v1) — Kempower-style (symptom-first, gated, canonical clusters)
+#
+# Philosophy:
+# - 1–2 gold-standard clusters do the heavy lifting (consistent gates + evidence pack + outcomes)
+# - Individual “fault” entries often act as ROUTERS (IDs stay stable for deep-links)
+# - Symptom-first > code-first. Codes route you into the same canonical path.
+#
 # Notes:
 # - Node-based decision tree: start_node + nodes map
-# - Each node has: prompt, options -> next
+# - node.options MUST be a LIST of {label, next}
 # - image: autel/<filename_without_extension> (expects files in assets/images/autel/*.png)
 
 faults:
 
   # ============================================================
-  # (1) GOLD STANDARD CLUSTER: Autel Power-Stage / HV Start Inhibit
+  # (1) GOLD STANDARD CLUSTER: Autel HV Enable / Power-Stage Start Sequence
+  # Canonical flow for:
+  # - Start inhibited / start failed
+  # - Precharge / DC bus not building
+  # - DC output contactor cannot close / verify
+  # - AC input contactor issues that affect HV enable
+  # - “Clicks then faults”
   # ============================================================
 
   - id: autel_power_stage_cluster
     platform: autel
     charger_type: dc
-    title: "Power-Stage / HV Start Inhibit (Precharge / DC Bus / Contactors)"
+    title: "HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)"
     severity: critical
     tags: [power_stage, hv_enable, precharge, dc_bus, contactor, interlock, insulation, start_inhibit]
 
     aliases:
       - "Power-stage fault"
       - "HV start inhibited"
-      - "precharge fault"
-      - "dc bus not ready"
-      - "dc contactor failed"
-      - "hv enable fault"
+      - "HV enable fault"
       - "start failed"
+      - "precharge fault"
+      - "pre-charge fault"
+      - "dc bus fault"
+      - "dc bus not ready"
+      - "dc bus undervoltage"
+      - "dc bus overvoltage"
+      - "output contactor fault"
+      - "dc contactor failed"
+      - "failed to close contactor"
+      - "ac contactor fault"
+      - "input contactor fault"
+      - "internal power fault"
 
     triggers:
       any_text_contains:
-        - "precharge"
-        - "dc bus"
+        - "power-stage"
+        - "power stage"
         - "hv enable"
+        - "hv start"
+        - "start inhibited"
         - "start failed"
-        - "contactor fault"
+        - "precharge"
+        - "pre-charge"
+        - "dc bus"
+        - "bus undervoltage"
+        - "bus overvoltage"
+        - "output contactor"
+        - "dc contactor"
+        - "failed to close"
+        - "contactor failed"
+        - "welded contactor"
+        - "ac contactor"
+        - "input contactor"
+        - "interlock open"
+        - "door interlock"
+        - "hvil"
+        - "e-stop"
+        - "estop"
+        - "insulation"
         - "isolation"
         - "imd"
-        - "hvil"
-        - "interlock"
 
     description: >
-      The charger is preventing HV start or cannot complete the HV start sequence
-      (enable → precharge → DC bus build → contactor verification).
+      The charger is preventing HV start or cannot complete the HV start sequence (enable → precharge → DC bus build →
+      contactor verification). The fastest wins come from gating: safety/visual → supply sanity → interlock/HVIL → IMD/isolation.
+      Only after gates are cleared do you chase contactors/DC bus. Capture the “first fault that returns” after a clean reboot.
+
+    safety_notes:
+      - LOTO before opening cabinets; wait minimum 5 minutes for DC bus discharge
+      - Treat insulation/isolation alarms as high risk; avoid repeated start attempts
+      - Do not bypass HVIL/interlocks; do not repeatedly reset trips
+
+    tools_required:
+      - Multimeter (true RMS preferred)
+      - Insulated hand tools
+      - Torch / inspection light
+      - IR thermometer (optional)
 
     decision_tree:
       start_node: PS0
       nodes:
+
         PS0:
           prompt: |
-            *Autel — Power-Stage / HV Start Inhibit*
-            Start symptom-first. What are you seeing?
+            ⚡ *Autel — HV Enable / Power-Stage Start Inhibit*
+            Start with what you’re seeing (symptom-first). Pick the closest:
           options:
-            - label: "🚫 Won’t start a session"
+            - label: "🚫 Won’t start / fails immediately"
+              next: PS_PATTERN_START_FAIL
+            - label: "⚠️ Clicks/tries then faults quickly"
+              next: PS_PATTERN_CLICKS
+            - label: "🟪 Insulation / Isolation / IMD alarm present"
+              next: PS_ISO_GATE
+            - label: "⬛ Interlock / HVIL / E-stop indicated"
+              next: PS_INTERLOCK_GATE
+            - label: "🔌 Supply unstable / undervoltage / phase issue suspected"
+              next: PS_SUPPLY_GATE
+            - label: "🔎 I have a specific message (precharge/DC bus/contactor)"
+              next: PS_CODE_ROUTER
+
+        PS_PATTERN_START_FAIL:
+          prompt: |
+            *Pattern check — Start fails*
+            Do you see an explicit block reason on HMI/logs?
+          options:
+            - label: "🟪 Isolation/IMD"
+              next: PS_ISO_GATE
+            - label: "⬛ Interlock/HVIL/E-stop"
+              next: PS_INTERLOCK_GATE
+            - label: "🟥 Contactor / Precharge / DC bus"
               next: PS_SAFE_REBOOT
-            - label: "⚠️ Clicks then faults"
+            - label: "No obvious reason shown"
               next: PS_SAFE_REBOOT
-            - label: "🟪 Insulation / IMD alarm"
-              next: PS_ESC
-            - label: "⬛ Interlock / E-stop"
-              next: PS_ESC
+
+        PS_PATTERN_CLICKS:
+          prompt: |
+            *Pattern check — Clicks then faults*
+            Most often: supply sag at enable, interlock gating, or contactor/DC bus verification.
+            Proceed with safe-first recovery to identify the *first fault that returns*.
+          options:
+            - label: "Continue ➡️"
+              next: PS_SAFE_REBOOT
+
+        PS_CODE_ROUTER:
+          prompt: |
+            *Quick routing (choose closest)*
+          options:
+            - label: "🟥 DC/Output contactor failed / failed to close / verify"
+              next: PS_SAFE_REBOOT
+            - label: "🟦 Precharge fault / DC bus not ready / undervoltage"
+              next: PS_SAFE_REBOOT
+            - label: "🟧 DC bus overvoltage"
+              next: PS_DC_BUS_OV
+            - label: "🟪 Insulation / isolation / IMD"
+              next: PS_ISO_GATE
+            - label: "⬛ Interlock / HVIL / E-stop"
+              next: PS_INTERLOCK_GATE
+            - label: "❓ Not sure"
+              next: PS_SAFE_REBOOT
 
         PS_SAFE_REBOOT:
           prompt: |
-            *Safe recovery*
-            Perform a controlled reboot and observe which fault returns first.
+            ✅ *Safe recovery first (do this once, cleanly)*
+            1) Confirm: no smoke/heat/water ingress
+            2) Controlled reboot or full power cycle
+            3) Note the *first* fault/message that returns (root clue)
           options:
-            - label: "Recovered"
+            - label: "Recovered ✅"
               next: PS_DONE_RESOLVED
             - label: "Still failing"
-              next: PS_ESC
+              next: PS_VISUAL
 
-        PS_DONE_RESOLVED:
+        PS_VISUAL:
           prompt: |
-            *Resolved*
-            Run a short test session and confirm stability.
+            👀 *Visual checks (non-invasive)*
+            - Burnt smell / discoloration / melted insulation?
+            - Water ingress / wet marks?
+            - Harness strain / loose external connectors?
+          options:
+            - label: "🔥 Unsafe condition found"
+              next: PS_ESC_UNSAFE
+            - label: "Looks OK"
+              next: PS_SUPPLY_GATE
+
+        PS_SUPPLY_GATE:
+          prompt: |
+            ⚡ *Supply sanity check*
+            Any upstream trip, undervoltage/phase loss alarm, or known site instability?
+          options:
+            - label: "Yes — supply issue suspected"
+              next: PS_SUPPLY_ACTIONS
+            - label: "No / unknown"
+              next: PS_INTERLOCK_GATE
+
+        PS_SUPPLY_ACTIONS:
+          prompt: |
+            *Supply actions (safe-first)*
+            - Check upstream breaker/isolator
+            - If authorised: confirm L-L voltages present and not sagging badly at enable
+            - Stabilise supply before deeper charger work
+          options:
+            - label: "Supply corrected → retry"
+              next: PS_SAFE_REBOOT
+            - label: "Supply seems OK → continue"
+              next: PS_INTERLOCK_GATE
+            - label: "Can’t verify → evidence + escalate"
+              next: PS_LOGS
+
+        PS_INTERLOCK_GATE:
+          prompt: |
+            ⬛ *Interlock / HVIL gate*
+            If any interlock is open, HV start will be inhibited. Clear this before chasing power-stage parts.
+          image: autel/interlock_chain_points
+          options:
+            - label: "Interlock cleared → retry"
+              next: PS_SAFE_REBOOT
+            - label: "Interlock won’t clear"
+              next: PS_LOGS
+
+        PS_ISO_GATE:
+          prompt: |
+            🟪 *Isolation / IMD gate (high risk)*
+            Treat as safety critical:
+            - Avoid repeated start attempts
+            - Inspect connector face + cabinet for moisture/contamination/burn marks
+          options:
+            - label: "Continue ➡️"
+              next: PS_ISO_ACTIONS
+
+        PS_ISO_ACTIONS:
+          prompt: |
+            *Isolation actions*
+            - Record exact IMD/isolation message + timestamp
+            - Inspect connector face (water/debris/burn marks)
+            - If repeatable across EVs/ports: tag out affected port and escalate
+          options:
+            - label: "Evidence pack → escalate"
+              next: PS_LOGS
+            - label: "Back to Autel menu"
+              next: "__MENU_AUTEL__"
+
+        PS_DC_BUS_OV:
+          prompt: |
+            🟧 *DC bus overvoltage*
+            Do NOT repeatedly retry. Capture evidence and escalate.
+          options:
+            - label: "Evidence pack → escalate"
+              next: PS_LOGS
+            - label: "Back to Autel menu"
+              next: "__MENU_AUTEL__"
+
+        PS_LOGS:
+          prompt: |
+            🗂️ *Evidence pack (fast escalation)*
+            Capture:
+            - Exact message/code + timestamp
+            - State: start fails vs clicks then faults
+            - Any supply alarms / measured L-L voltages (if taken)
+            - Interlock/HVIL status
+            - IMD/isolation status (if shown)
+            - Actions taken (reboot/power cycle)
+          options:
+            - label: "Escalate"
+              next: PS_ESC
+            - label: "Back to Autel menu"
+              next: "__MENU_AUTEL__"
+
+        PS_ESC_UNSAFE:
+          prompt: |
+            *⚠️ Escalate immediately — unsafe condition*
+            Do NOT re-energise.
+            Provide photos + what you observed (smell/heat/water ingress).
           options:
             - label: "Autel menu"
-              next: __MENU_AUTEL__
+              next: "__MENU_AUTEL__"
 
         PS_ESC:
           prompt: |
-            *Escalate — Power-Stage / HV Start Inhibit*
-            Include fault text, timestamps, and observed behaviour.
+            *Escalate — Autel HV Enable / Power-Stage Start Inhibit*
+            Include:
+            - Exact code/text + timestamps
+            - State: start fails vs clicks then faults
+            - Supply notes (alarms / measured L-L if available)
+            - Interlock/HVIL/IMD status
+            - Actions taken (reboot/power cycle)
           options:
             - label: "Autel menu"
-              next: __MENU_AUTEL__
+              next: "__MENU_AUTEL__"
+
+        PS_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            HV start restored. Run a short test session and confirm no recurrence.
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
 
 
   # ============================================================
-  # (7) TCU Communication Error — UPDATED (hardware-aware)
+  # (2) ROUTER: AC Contactor Fault (ID stable → routes into cluster)
+  # ============================================================
+
+  - id: autel_ac_contactor_fault
+    platform: autel
+    charger_type: dc
+    title: "AC Contactor Fault (Autel DC) — Routed to HV Enable Cluster"
+    severity: high
+    tags: [power, input, contactor, routed, hv_enable, start_inhibit]
+
+    aliases:
+      - "AC Contactor Fault"
+      - "AC contactor error"
+      - "input contactor fault"
+      - "main contactor fault"
+      - "contactor open feedback"
+      - "contactor feedback error"
+      - "input relay fault"
+      - "mains contactor fault"
+
+    triggers:
+      any_text_contains:
+        - "ac contactor"
+        - "input contactor"
+        - "main contactor"
+        - "contactor feedback"
+        - "open feedback"
+        - "mains contactor"
+        - "input relay"
+
+    description: >
+      Routed fault: AC contactor alarms commonly share root causes with the HV enable sequence (supply stability,
+      interlocks/HVIL, IMD/isolation gating, and contactor/DC bus verification). Use the canonical cluster.
+
+    decision_tree:
+      start_node: RAC0
+      nodes:
+        RAC0:
+          prompt: |
+            ⚡ *AC Contactor Fault (Autel) — Routed*
+            This is handled by the canonical flow:
+            *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
+
+            Open that fault and follow the symptom-first gates.
+          options:
+            - label: "🏠 Autel menu (open HV Enable cluster)"
+              next: "__MENU_AUTEL__"
+
+
+  # ============================================================
+  # (3) ROUTER: DC Contactor Fault (ID stable → routes into cluster)
+  # ============================================================
+
+  - id: autel_dc_contactor_fault
+    platform: autel
+    charger_type: dc
+    title: "DC Contactor Fault / Failed to Close (Autel DC) — Routed"
+    severity: high
+    tags: [dc, contactor, output, routed, hv_enable, start_inhibit]
+
+    aliases:
+      - "DC Contactor Fault"
+      - "output contactor fault"
+      - "failed to close"
+      - "contactor verify failed"
+      - "welded contactor"
+
+    triggers:
+      any_text_contains:
+        - "dc contactor"
+        - "output contactor"
+        - "failed to close"
+        - "verify failed"
+        - "welded contactor"
+
+    description: >
+      Routed fault: DC contactor verification failures are part of the HV enable start sequence.
+      Use the canonical HV Enable / Power-Stage cluster to avoid duplicated steps.
+
+    decision_tree:
+      start_node: RDC0
+      nodes:
+        RDC0:
+          prompt: |
+            🟥 *DC Contactor Fault — Routed*
+            Use the canonical flow:
+            *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
+
+            Open that fault and follow the gates (supply → interlock → IMD → evidence).
+          options:
+            - label: "🏠 Autel menu (open HV Enable cluster)"
+              next: "__MENU_AUTEL__"
+
+
+  # ============================================================
+  # (4) Backend / OCPP Communication Fault
+  # ============================================================
+
+  - id: autel_backend_ocpp_comms_fault
+    platform: autel
+    charger_type: dc
+    title: "Backend / OCPP Communication Fault (Autel DC)"
+    severity: high
+    tags: [ocpp, backend, comms, modem, sim, network]
+
+    aliases:
+      - "ocpp offline"
+      - "backend offline"
+      - "server offline"
+      - "network offline"
+      - "charger offline"
+
+    triggers:
+      any_text_contains:
+        - "ocpp"
+        - "offline"
+        - "backend offline"
+        - "server"
+        - "network offline"
+
+    description: >
+      The charger is offline to the backend (OCPP). The highest success path is: confirm state → controlled reboot →
+      check signal/link indicators → basic SIM/APN sanity → capture evidence for backend/OEM.
+
+    decision_tree:
+      start_node: C0
+      nodes:
+
+        C0:
+          prompt: |
+            🌐 *Backend / OCPP offline — Start*
+            Confirm offline state. Is the site generally online (other chargers ok)?
+          options:
+            - label: "Other chargers also offline / site issue likely"
+              next: C_SITE
+            - label: "Only this charger offline"
+              next: C1
+            - label: "Not sure"
+              next: C1
+
+        C_SITE:
+          prompt: |
+            *Site-wide comms issue likely*
+            - Check upstream router/modem power
+            - Check site WAN
+            - Capture timestamps + site notes
+          options:
+            - label: "Controlled reboot after site checks"
+              next: C1
+            - label: "Escalate with evidence"
+              next: C_ESC
+
+        C1:
+          prompt: |
+            *Controlled reboot / power cycle*
+            Reboot and allow time for modem registration and OCPP handshake.
+          options:
+            - label: "Recovered (online) ✅"
+              next: C_DONE
+            - label: "Still offline"
+              next: C2
+
+        C2:
+          prompt: |
+            *Quick link checks*
+            What connection type is in use?
+          options:
+            - label: "📶 Cellular/LTE"
+              next: C_LTE
+            - label: "🔌 Ethernet"
+              next: C_ETH
+            - label: "❓ Not sure"
+              next: C_EVIDENCE
+
+        C_LTE:
+          prompt: |
+            *LTE checks*
+            - Check antenna seated and not damaged
+            - Check signal indicator (if available)
+            - If permitted: reseat SIM, confirm correct APN profile
+          options:
+            - label: "Retest after LTE checks"
+              next: C1
+            - label: "Evidence pack"
+              next: C_EVIDENCE
+
+        C_ETH:
+          prompt: |
+            *Ethernet checks*
+            - Link lights present?
+            - Reseat cable at charger and switch
+            - Try alternate port/cable if permitted
+          options:
+            - label: "Retest after Ethernet checks"
+              next: C1
+            - label: "Evidence pack"
+              next: C_EVIDENCE
+
+        C_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack (backend/OEM)*
+            Capture:
+            - Offline message + timestamp
+            - Connection type (LTE/Ethernet)
+            - Signal strength / link lights (if known)
+            - SIM/APN notes (if checked)
+          options:
+            - label: "Escalate"
+              next: C_ESC
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+        C_ESC:
+          prompt: |
+            *Escalate — Backend/OCPP*
+            Include: last known online time, timestamps, link type, and what was tried (reboot/cables/antenna/SIM/APN).
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+        C_DONE:
+          prompt: |
+            ✅ *Recovered*
+            Confirm stable backend connection (no repeated dropouts).
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+
+  # ============================================================
+  # (5) Overtemperature / Cooling Fault
+  # ============================================================
+
+  - id: autel_overtemp_cooling_fault
+    platform: autel
+    charger_type: dc
+    title: "Overtemperature / Cooling Fault (Autel DC)"
+    severity: high
+    tags: [cooling, overtemp, fans, filters]
+
+    aliases:
+      - "overtemp"
+      - "over temperature"
+      - "thermal fault"
+      - "fan fault"
+
+    triggers:
+      any_text_contains:
+        - "overtemp"
+        - "over temperature"
+        - "thermal"
+        - "fan fault"
+        - "cooling fault"
+
+    description: >
+      Overtemperature indicates thermal limits exceeded or inadequate cooling detected. Fastest wins are filters/airflow,
+      fan operation, and site ventilation. Escalate with evidence if persistent.
+
+    decision_tree:
+      start_node: T0
+      nodes:
+        T0:
+          prompt: |
+            🟫 *Overtemperature / Cooling — Start*
+            First: airflow and filters.
+          image: autel/cooling_filters_location
+          options:
+            - label: "Continue ➡️"
+              next: T1
+
+        T1:
+          prompt: |
+            *Filters/vents blocked?*
+            Inspect filters/vents for dust blockage and cabinet airflow.
+          image: autel/cooling_filters_location
+          options:
+            - label: "Yes — blocked/dirty"
+              next: T_FIX_FILTERS
+            - label: "No — looks OK"
+              next: T2
+
+        T_FIX_FILTERS:
+          prompt: |
+            *Clean/replace filters*
+            Clean/replace filters then retest under load.
+          image: autel/cooling_filters_location
+          options:
+            - label: "Retest"
+              next: T2
+
+        T2:
+          prompt: |
+            *Fan check*
+            Confirm fans are operating and unobstructed.
+          image: autel/cooling_fan_location
+          options:
+            - label: "Fans OK"
+              next: T_DONE_OR_ESC
+            - label: "Fan not running / blocked"
+              next: T_FIX_FANS
+
+        T_FIX_FANS:
+          prompt: |
+            *Fix fan issue*
+            Clear obstruction, check fan connector/power, replace fan if failed. Then retest.
+          image: autel/cooling_fan_location
+          options:
+            - label: "Retest"
+              next: T_DONE_OR_ESC
+
+        T_DONE_OR_ESC:
+          prompt: |
+            Did the fault clear after airflow/fan actions?
+          options:
+            - label: "Cleared ✅"
+              next: T_DONE
+            - label: "Still faulting"
+              next: T_ESC
+
+        T_ESC:
+          prompt: |
+            *Escalate — Overtemperature*
+            Include: ambient temp, filter condition, fan status, and timestamps.
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+        T_DONE:
+          prompt: |
+            ✅ *Resolved*
+            Run a short test session and confirm no recurrence.
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+
+  # ============================================================
+  # (6) Power Module Fault (kept as an entry label; routes when needed)
+  # ============================================================
+
+  - id: autel_power_module_fault
+    platform: autel
+    charger_type: dc
+    title: "Power Module Fault / Module Offline (Autel DC)"
+    severity: high
+    tags: [power_module, rectifier, module_offline, routed, hv_enable]
+
+    aliases:
+      - "module offline"
+      - "power module offline"
+      - "rectifier module fault"
+      - "power module fault"
+
+    triggers:
+      any_text_contains:
+        - "power module"
+        - "module offline"
+        - "rectifier"
+        - "power module fault"
+
+    description: >
+      First action is reseat to eliminate poor seating/connection. If the site symptom also includes start inhibit,
+      precharge/DC bus/contactor messages, route into the canonical HV Enable / Power-Stage cluster.
+
+    decision_tree:
+      start_node: PM0
+      nodes:
+
+        PM0:
+          prompt: |
+            🧩 *Power Module Offline — Start*
+            Are you seeing HV start inhibited / precharge/DC bus/contactor messages too?
+          options:
+            - label: "Yes — start inhibited / clicks then faults"
+              next: PM_ROUTE_CLUSTER
+            - label: "No — just a module offline/alarm"
+              next: PM1
+
+        PM1:
+          prompt: |
+            *Reseat (authorised only)*
+            Apply LOTO, reseat the affected module/connection, then retest.
+          options:
+            - label: "Retest"
+              next: PM2
+
+        PM2:
+          prompt: |
+            Did the module return online?
+          options:
+            - label: "Resolved ✅"
+              next: PM_DONE
+            - label: "Still offline"
+              next: PM_ESC
+
+        PM_ROUTE_CLUSTER:
+          prompt: |
+            Use canonical flow:
+            *HV Enable / Power-Stage Start Inhibit (Precharge / DC Bus / Contactors)*
+            (It includes gates + evidence pack for fastest resolution.)
+          options:
+            - label: "🏠 Autel menu (open HV Enable cluster)"
+              next: "__MENU_AUTEL__"
+
+        PM_ESC:
+          prompt: |
+            *Escalate — Power Module Offline*
+            Include: which module/slot (if known), LEDs, actions (reseat), and timestamps.
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+        PM_DONE:
+          prompt: |
+            ✅ *Resolved*
+            Run a short test session and confirm stable operation.
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
+
+
+  # ============================================================
+  # (7) TCU Communication Error (expanded per your request)
   # ============================================================
 
   - id: autel_tcu_communication_error
     platform: autel
     charger_type: dc
-    title: "TCU Communication Error (Telematics / Comms Module)"
+    title: "TCU Communication Error (Telematics/Comms Module)"
     severity: high
-    tags: [tcu, modem, antenna, harness, network, ocpp]
+    tags: [tcu, comms, modem, antenna, harness, leds, ocpp]
+
+    aliases:
+      - "TCU communication error"
+      - "TCU comm error"
+      - "TCU comms fault"
+      - "TCU offline"
+      - "telematics offline"
+      - "communication with tcu"
 
     triggers:
       any_text_contains:
         - "tcu communication"
+        - "tcu comm"
+        - "tcu comms"
         - "tcu offline"
         - "tcu not responding"
         - "telematics"
         - "communication with tcu"
 
     description: >
-      Controller cannot communicate reliably with the TCU.
-      Common causes include loose harnessing, antenna/RF issues,
-      control power instability, or TCU/modem failure.
+      Controller cannot communicate reliably with the TCU. Often presents as intermittent offline events, failed backend
+      registration, or repeated comms alarms. Highest-yield field checks: controlled reboot, observe LED states, verify
+      antenna and harness seating, then isolate network vs hardware.
 
     decision_tree:
       start_node: TCU0
@@ -117,65 +755,111 @@ faults:
 
         TCU0:
           prompt: |
-            *TCU Communication Error — Start*
-            Is the charger also offline to the backend?
+            📡 *TCU Communication Error — Start*
+            Is the charger also showing OCPP/backend offline?
           options:
-            - label: "Yes — backend offline"
-              next: TCU_REBOOT
-            - label: "No — charging still works"
-              next: TCU_REBOOT
+            - label: "✅ Yes (offline as well)"
+              next: TCU1
+            - label: "❌ No (charging works / backend ok)"
+              next: TCU2
+            - label: "Not sure"
+              next: TCU1
 
-        TCU_REBOOT:
+        TCU1:
           prompt: |
-            *Controlled reboot*
-            Reboot the charger (HMI or controlled power cycle).
+            *Controlled reboot first*
+            Reboot via HMI/service menu if available; otherwise controlled power cycle.
+            Then check if the alarm returns.
           options:
-            - label: "Resolved"
+            - label: "Recovered ✅"
               next: TCU_MONITOR
             - label: "Still faulting"
-              next: TCU_HW_CHECK
+              next: TCU_LED_CHECK
 
-        TCU_HW_CHECK:
+        TCU2:
           prompt: |
-            *TCU hardware checks (do before escalation)*
-            Verify the physical comms path:
-            - Are TCU LEDs illuminated or flashing (power/activity)?
-            - Antenna securely connected and undamaged
-            - If possible, test with a known-good antenna
-            - Confirm all TCU harnesses/connectors are fully seated
-              (power, data, intermediate adapters)
+            *Alarm but service seems OK*
+            Treat as intermittent comms/harness/TCU stability issue. Proceed to physical sanity checks.
           options:
-            - label: "Issue found and corrected"
-              next: TCU_RETEST
-            - label: "All checks OK"
+            - label: "Continue ➡️"
+              next: TCU_LED_CHECK
+
+        TCU_LED_CHECK:
+          prompt: |
+            💡 *TCU LED / status check*
+            Observe TCU indicators (power/status/network) if accessible.
+            What do you see?
+          options:
+            - label: "No LEDs / dead"
+              next: TCU_POWER_HARNESS
+            - label: "LEDs on but abnormal (no network / stuck pattern)"
+              next: TCU_ANTENNA
+            - label: "LEDs normal but alarm persists"
+              next: TCU_BACKEND_ALIGN
+
+        TCU_POWER_HARNESS:
+          prompt: |
+            🔌 *Power + harness seating*
+            - Check harness connectors are fully seated/latched (controller ↔ TCU)
+            - Check for loose pins, strain, water ingress
+            - If permitted: confirm TCU supply present (control power integrity)
+          options:
+            - label: "Retest after reseat"
+              next: TCU1
+            - label: "Still faulting"
+              next: TCU_ANTENNA
+
+        TCU_ANTENNA:
+          prompt: |
+            📶 *Antenna sanity*
+            - Confirm antenna is connected tightly at the TCU
+            - Inspect cable for cuts/kinks/crush points
+            - If you have a known-good antenna: swap to test
+          options:
+            - label: "Retest after antenna checks"
+              next: TCU1
+            - label: "Still faulting"
+              next: TCU_BACKEND_ALIGN
+
+        TCU_BACKEND_ALIGN:
+          prompt: |
+            🌐 *Network alignment*
+            If TCU appears alive but comms persist:
+            - Check LTE signal (if shown)
+            - If Ethernet is used, confirm link lights/port
+            - Confirm time sync/DNS not obviously wrong (if visible)
+          options:
+            - label: "Evidence pack"
+              next: TCU_EVIDENCE
+            - label: "Back to Autel menu"
+              next: "__MENU_AUTEL__"
+
+        TCU_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — TCU*
+            Capture:
+            - Exact alarm text + timestamps/frequency
+            - LED state description (power/status/network)
+            - Antenna/harness actions performed
+            - Whether backend/offline was also present
+          options:
+            - label: "Escalate"
               next: TCU_ESC
-
-        TCU_RETEST:
-          prompt: |
-            *Re-test*
-            Reboot again and allow time for modem registration.
-          options:
-            - label: "Online"
-              next: __MENU_AUTEL__
-            - label: "Still offline"
-              next: TCU_ESC
-
-        TCU_MONITOR:
-          prompt: |
-            *Monitor*
-            Confirm no repeated TCU or backend dropouts.
-          options:
             - label: "Autel menu"
-              next: __MENU_AUTEL__
+              next: "__MENU_AUTEL__"
 
         TCU_ESC:
           prompt: |
             *Escalate — TCU Communication Error*
-            Include:
-            - LED behaviour
-            - Antenna test performed
-            - Harness checks completed
-            - Frequency/timestamps of fault
+            Include evidence pack + whether a known-good antenna/harness reseat changed behaviour.
           options:
             - label: "Autel menu"
-              next: __MENU_AUTEL__
+              next: "__MENU_AUTEL__"
+
+        TCU_MONITOR:
+          prompt: |
+            ✅ *Monitor*
+            Confirm stability (no repeated offline/TCU alarms).
+          options:
+            - label: "Autel menu"
+              next: "__MENU_AUTEL__"
