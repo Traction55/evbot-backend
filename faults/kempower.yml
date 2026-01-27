@@ -1,11 +1,17 @@
 # kempower.yml
-# EVBot Fault Pack: Kempower (Top 12 by impact / frequency style)
+# EVBot Fault Pack: Kempower (Top faults by impact / frequency style)
 # Source: Kempower Error Codes Rev 2.00 (09-2025)
+#
+# Notes:
+# - platform: kempower
+# - decision_tree.start_node + decision_tree.nodes
+# - node.options MUST be a LIST of {label, next}
+# - Keep IDs stable so your bot can deep-link
 
 faults:
 
   # ============================================================
-  # MERGED CLUSTER (REWRITE): Power Modules Offline / Derating
+  # MERGED CLUSTER (GOLD STANDARD): Power Modules Offline / Derating
   # Keep ID stable for deep-links: kempower_power_module_cluster
   # ============================================================
 
@@ -33,7 +39,6 @@ faults:
 
     triggers:
       any_text_contains:
-        # Generic text
         - "power module"
         - "power stack"
         - "pmc"
@@ -49,7 +54,6 @@ faults:
         - "not communicating"
         - "offline"
         - "relaycard"
-        # Error code strings (as your bot sees them)
         - "RT_PMC_UNAVAILABLE"
         - "rt_pmc_unavailable"
         - "RT_RELAYCARD_MISSING"
@@ -91,7 +95,6 @@ faults:
             - label: "⚠️ Generic power module / power stack fault"
               next: PM_PATTERN_GENERIC
 
-        # ---------- Pattern check (collapses uncertainty early) ----------
         PM_PATTERN_DERATE:
           prompt: |
             *Pattern check — Derating*
@@ -133,7 +136,6 @@ faults:
             - label: "No — unclear"
               next: PM_SAFETY
 
-        # ---------- Code picker (moved behind symptom-first) ----------
         PM_CODE_PICKER:
           prompt: |
             *Select the closest code/symptom shown on HMI:*
@@ -151,7 +153,6 @@ faults:
             - label: "⚠️ Not sure / generic power module fault"
               next: PM_SYM_GENERIC
 
-        # ---------- Common safety gate ----------
         PM_SAFETY:
           prompt: |
             ✅ *Safety first (non-negotiable)*
@@ -162,7 +163,6 @@ faults:
             - label: "Continue ➡️"
               next: PM_VISUAL
 
-        # ---------- Common visual + supply checks ----------
         PM_VISUAL:
           prompt: |
             👀 *Visual checks (cabinet + rack)*
@@ -292,7 +292,6 @@ faults:
             - label: "Back to Kempower menu"
               next: __MENU_KEMPOWER__
 
-        # ---------- Symptom-specific “extras” (light branching) ----------
         PM_SYM_PMC_OFFLINE:
           prompt: |
             *PMC Offline / Not communicating (RT_PMC_UNAVAILABLE)*
@@ -357,7 +356,6 @@ faults:
             - label: "Start checks ➡️"
               next: PM_SAFETY
 
-        # ---------- Outcomes (explicit end states) ----------
         PM_REPLACE_MODULE:
           prompt: |
             ✅ *Fault follows module*
@@ -432,7 +430,7 @@ faults:
 
 
   # ============================================================
-  # NO_HEARTBEAT (updated to the version we discussed)
+  # NO_HEARTBEAT (gold-standard lite)
   # Keep ID stable: kempower_no_heartbeat
   # ============================================================
 
@@ -440,15 +438,19 @@ faults:
     platform: kempower
     charger_type: dc
     title: "Satellite / Control Unit Offline (No Communication)"
+    severity: high
+    tags: [network, ethernet, satellite, control_unit, offline]
 
     aliases:
       - "NO_HEARTBEAT"
+      - "no_heartbeat"
       - "no heartbeat"
       - "heartbeat missing"
       - "satellite offline"
       - "satellite not responding"
       - "control unit offline"
       - "control unit not responding"
+
     triggers:
       any_text_contains:
         - "NO_HEARTBEAT"
@@ -457,91 +459,149 @@ faults:
         - "heartbeat missing"
         - "satellite offline"
         - "control unit offline"
-    severity: high
-    tags: [network, ethernet, satellite, control_unit, offline]
 
     description: >
-      Satellite/Control Unit is configured but not available on the local network. This can be a single-device
-      issue (24V supply, local ethernet, RJ45 termination) or system-wide (switching, cabinet-to-cabinet links,
-      internal omega board ↔ Ethernet switch, grounding/jumpers in multi-cabinet systems).
+      A Satellite/Control Unit is configured but not available on the local network.
+      This can be a single-device issue (24V supply, local ethernet, RJ45 termination) or system-wide
+      (switching, cabinet-to-cabinet links, internal omega board ↔ Ethernet switch, grounding/jumpers in multi-cabinet systems).
+
+    safety_notes:
+      - If opening cabinets, follow LOTO and discharge requirements
+      - Do not bypass safety interlocks or network segregation rules
 
     decision_tree:
       start_node: KHB0
       nodes:
+
         KHB0:
           prompt: |
-            *NO_HEARTBEAT — Start*
+            *NO_HEARTBEAT — Start (pattern check)*
             Is it *one* Satellite/Control Unit, or *all* of them?
           options:
             - label: "Only one satellite"
               next: KHB1
-            - label: "All satellites"
+            - label: "All satellites / whole station"
               next: KHB2
 
         KHB1:
           prompt: |
-            *Single satellite issue*
-            Check 24V supply at the Satellite/Control Unit (23–25VDC) and inspect RJ45 cabling/termination.
-            If needed, inspect RJ45 extension block connections and flat cable to the display.
+            *Single satellite (local path)*
+            Check:
+            - 24V supply at satellite/control unit (target 23–25VDC)
+            - RJ45 cable seating/termination
+            - RJ45 extension block + flat cable to display (if fitted)
           options:
-            - label: "Power/ethernet fixed → retest"
+            - label: "Fixed → re-test"
               next: KHB3
             - label: "Still offline"
-              next: KHB_ESC
+              next: KHB_LOGS
 
         KHB2:
           prompt: |
-            *System-wide issue*
-            Check network links between main/secondary cabinets and inside control module (omega board ↔ Ethernet switch).
-            With multi-cabinet units, confirm cabinet GND terminal blocks are jumpered.
+            *System-wide (infrastructure path)*
+            Check:
+            - Network links between main/secondary cabinets
+            - Inside control module: omega board ↔ Ethernet switch links
+            - Multi-cabinet: confirm cabinet GND terminal blocks are jumpered as required
           options:
-            - label: "Fixed → retest"
+            - label: "Fixed → re-test"
               next: KHB3
             - label: "Still offline"
-              next: KHB_ESC
+              next: KHB_LOGS
 
         KHB3:
           prompt: |
             *Re-test*
-            Restart charger and confirm heartbeat returns.
+            Restart charger/controller (controlled) and confirm heartbeat returns.
           options:
-            - label: "Done"
+            - label: "✅ Resolved"
+              next: KHB_DONE_RESOLVED
+            - label: "⚠️ Still offline"
+              next: KHB_LOGS
+
+        KHB_LOGS:
+          prompt: |
+            🗂️ *Evidence pack (before escalating)*
+            Capture:
+            - Which satellite(s) affected
+            - 24V measurement result(s)
+            - Photos of RJ45 terminations / switch LEDs (if accessible)
+            - Timestamps + any recent works/changes
+          options:
+            - label: "Escalate"
+              next: KHB_ESC
+            - label: "Back to Kempower menu"
               next: __MENU_KEMPOWER__
 
         KHB_ESC:
           prompt: |
-            *Escalate*
-            Provide: which satellite(s), 24V measurement result, cabling checks performed, and timestamps.
+            *Escalate — NO_HEARTBEAT*
+            Provide:
+            - which satellite(s)
+            - 24V measurements
+            - what you reseated/checked
+            - photos + timestamps
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KHB_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            Heartbeat restored.
+            Before leaving:
+            - Confirm satellites remain online after 5–10 minutes
+            - Note what fixed it (power, RJ45, switch, jumper)
+          options:
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
 
   # ============================================================
-  # Other top faults (left as-is)
+  # COMM_NOT_READY (gold-standard lite)
+  # Keep ID stable: kempower_comm_not_ready
   # ============================================================
 
   - id: kempower_comm_not_ready
     platform: kempower
     charger_type: dc
     title: "Vehicle Communication Failed (CCS Control Pilot Not Ready)"
-
-    aliases: ["comm not ready", "ccs not ready", "control pilot fault"]
-    triggers:
-      any_text_contains: ["COMM_NOT_READY", "comm_not_ready"]
     severity: high
     tags: [ccs, control_pilot, connector, startup]
 
+    aliases:
+      - "COMM_NOT_READY"
+      - "comm_not_ready"
+      - "comm not ready"
+      - "ccs not ready"
+      - "control pilot fault"
+      - "cp not ready"
+      - "pilot fault"
+
+    triggers:
+      any_text_contains:
+        - "COMM_NOT_READY"
+        - "comm_not_ready"
+        - "comm not ready"
+        - "control pilot"
+        - "cp not ready"
+
     description: >
-      CCS not available; Control Pilot (CP) in fault state during startup.
+      CCS is not available because Control Pilot (CP) is in a fault state at startup.
+      Commonly wiring/commissioning, CCS card revision mismatch, connector/CP pin integrity, or a transient boot fault.
+
+    safety_notes:
+      - Do not force connectors; inspect for damage/debris/water first
+      - If repeated across vehicles/connectors, treat as hardware/wiring and escalate
 
     decision_tree:
       start_node: KCP0
       nodes:
+
         KCP0:
           prompt: |
-            *COMM_NOT_READY — Start*
-            Is this after recent install/commissioning work or hardware changes?
+            *COMM_NOT_READY — Start (pattern check)*
+            Did this start after recent install/commissioning work or hardware changes?
           options:
             - label: "Yes (recent changes)"
               next: KCP1
@@ -550,128 +610,245 @@ faults:
 
         KCP1:
           prompt: |
-            *Commissioning / wiring path*
-            Restart the charger and verify CP pin is connected correctly.
-            If hardware mismatch is suspected, replace optional CCS card with newer revision.
+            *Commissioning path*
+            Check:
+            - CP pin continuity/termination per install spec
+            - Connector condition (bent pin/debris/water)
+            - If mismatch suspected: optional CCS card revision may need upgrade
           options:
-            - label: "Resolved"
-              next: KCP_DONE
-            - label: "Still failing"
-              next: KCP_ESC
+            - label: "Restart & re-test"
+              next: KCP_RETEST
+            - label: "Need evidence/escalate"
+              next: KCP_LOGS
 
         KCP2:
           prompt: |
             *Sudden fault path*
-            Restart the charger. If persists, treat as CCS card / CP wiring integrity issue and escalate with photos/notes.
+            Do safe-first recovery:
+            - Controlled restart (controller/HMI if available)
+            - If persists: full power cycle (per procedure)
           options:
-            - label: "Resolved"
-              next: KCP_DONE
+            - label: "Restart & re-test"
+              next: KCP_RETEST
             - label: "Still failing"
-              next: KCP_ESC
+              next: KCP_LOGS
 
-        KCP_DONE:
+        KCP_RETEST:
           prompt: |
-            *Complete*
-            ✅ CCS/CP flow complete.
+            *Re-test*
+            Try:
+            - Known-good EV (if available)
+            - Alternate connector (if station supports)
           options:
-            - label: "Kempower menu"
+            - label: "✅ Resolved"
+              next: KCP_DONE_RESOLVED
+            - label: "⚠️ Still failing"
+              next: KCP_LOGS
+
+        KCP_LOGS:
+          prompt: |
+            🗂️ *Evidence pack*
+            Capture:
+            - Connector ID used + whether other connector works
+            - EV model tested
+            - Exact message/code + timestamp
+            - Photos of connector face/CP pin area (external only)
+            - Recent works/changes notes (if any)
+          options:
+            - label: "Escalate"
+              next: KCP_ESC
+            - label: "Back to Kempower menu"
               next: __MENU_KEMPOWER__
 
         KCP_ESC:
           prompt: |
-            *Escalate*
-            Provide: connector ID, CP wiring check result, any recent work, and timestamps.
+            *Escalate — COMM_NOT_READY*
+            Provide:
+            - connector ID + EV model
+            - CP wiring check result (if performed)
+            - timestamps + photos
+            - recent work history
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
+        KCP_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            CP/CCS comms restored.
+            Before leaving:
+            - Confirm 2–3 start attempts succeed
+            - Note what fixed it (restart vs reseat vs connector swap)
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  # ============================================================
+  # RCM_BAD (gold-standard lite)
+  # Keep ID stable: kempower_rcm_bad
+  # ============================================================
 
   - id: kempower_rcm_bad
     platform: kempower
     charger_type: ac
     title: "Earth Leakage Detected (Residual Current Monitor Trip)"
-
-    aliases: ["rcm bad", "residual current leak", "earth leakage"]
-    triggers:
-      any_text_contains: ["RCM_BAD", "rcm_bad"]
     severity: high
     tags: [safety, rcd, rcm, earth_leakage, type2]
 
+    aliases:
+      - "RCM_BAD"
+      - "rcm_bad"
+      - "rcm bad"
+      - "residual current leak"
+      - "earth leakage"
+      - "leakage detected"
+
+    triggers:
+      any_text_contains:
+        - "RCM_BAD"
+        - "rcm_bad"
+        - "rcm bad"
+        - "earth leakage"
+        - "residual current"
+
     description: >
-      Residual current monitor detected a leak to protective earth (PE); connector disabled for safety.
+      The residual current monitor detected leakage to protective earth (PE) and disabled output for safety.
+      Often moisture-related (rain/condensation/contaminated connector), cable damage, or an RCM sensor fault.
+
+    safety_notes:
+      - Treat as safety-critical; do not repeatedly attempt to charge
+      - If moisture or damage is suspected, take out of service and escalate
+      - Insulation/IR testing only by authorised personnel using approved methods
 
     decision_tree:
       start_node: KRCM0
       nodes:
+
         KRCM0:
           prompt: |
-            *RCM_BAD — Start*
-            Did it occur once only, possibly after rain/moisture?
+            *RCM_BAD — Start (pattern check)*
+            Was this a one-off event (e.g., after rain/washdown), or is it repeating?
           options:
-            - label: "Yes (single event)"
+            - label: "One-off / after moisture"
               next: KRCM1
-            - label: "Repeating"
+            - label: "Repeating / persistent"
               next: KRCM2
 
         KRCM1:
           prompt: |
-            *Single event*
-            Restart charger. If needed, shut off AC main power supply and turn back ON, then re-test.
+            *One-off moisture path*
+            - Inspect connector/port externally for water/debris
+            - Allow drying time if conditions suggest moisture
+            - Perform controlled restart / AC main OFF→ON (if permitted)
           options:
-            - label: "Resolved"
-              next: KRCM_DONE
-            - label: "Still present"
-              next: KRCM2
+            - label: "Re-test"
+              next: KRCM_RETEST
+            - label: "Collect evidence"
+              next: KRCM_LOGS
 
         KRCM2:
           prompt: |
-            *Repeating / persistent*
-            Find source of leakage:
-            - Measure insulation resistance between all phases and PE (follow local safety rules).
-            If insulation is OK, replace the RCM.
+            *Persistent path*
+            Likely leakage source or sensor fault.
+            Next actions (authorised only):
+            - Insulation resistance testing phases→PE
+            - Inspect cable/connector for damage
+            If IR is OK, RCM device may be faulty.
           options:
-            - label: "Escalate (need support)"
+            - label: "Escalate"
               next: KRCM_ESC
-            - label: "Done"
-              next: KRCM_DONE
+            - label: "Collect evidence"
+              next: KRCM_LOGS
 
-        KRCM_DONE:
+        KRCM_RETEST:
           prompt: |
-            *Complete*
-            ✅ RCM flow complete.
+            *Re-test*
+            Does the fault clear and charging resume normally?
           options:
-            - label: "Kempower menu"
+            - label: "✅ Resolved"
+              next: KRCM_DONE_RESOLVED
+            - label: "⚠️ Still present"
+              next: KRCM_LOGS
+
+        KRCM_LOGS:
+          prompt: |
+            🗂️ *Evidence pack*
+            Capture:
+            - Weather/moisture notes
+            - Photos of connector/port condition
+            - Exact code/message + timestamp
+            - Whether it happens with no load vs on plug-in (if observable)
+          options:
+            - label: "Escalate"
+              next: KRCM_ESC
+            - label: "Back to Kempower menu"
               next: __MENU_KEMPOWER__
 
         KRCM_ESC:
           prompt: |
-            *Escalate*
-            Provide: weather/moisture notes, IR results, photos of connector/port, timestamps.
+            *Escalate — RCM_BAD*
+            Provide:
+            - moisture/weather context
+            - photos
+            - any IR results (if authorised/performed)
+            - timestamps + repeatability
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
+        KRCM_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            Leakage cleared and unit operating.
+            Before leaving:
+            - Confirm repeat start works
+            - Note conditions (rain/moisture) + action taken
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  # ============================================================
+  # AFE_COMMUNICATION_ERROR (gold-standard lite)
+  # Keep ID stable: kempower_afe_communication_error
+  # ============================================================
 
   - id: kempower_afe_communication_error
     platform: kempower
     charger_type: dc
     title: "Grid Input Stage Communication Fault (AFE Internal Comms)"
-    aliases: ["afe communication error", "pmc comms bus error"]
-    triggers:
-      any_text_contains: ["AFE_COMMUNICATION_ERROR", "afe_communication_error"]
     severity: medium
     tags: [pmc, afe, firmware, comms]
 
+    aliases:
+      - "AFE_COMMUNICATION_ERROR"
+      - "afe_communication_error"
+      - "afe communication error"
+      - "pmc comms bus error"
+
+    triggers:
+      any_text_contains:
+        - "AFE_COMMUNICATION_ERROR"
+        - "afe_communication_error"
+        - "afe communication error"
+
     description: >
-      PMC internal communication bus error; PMC temporarily unavailable; reduced power in cabinet.
+      PMC internal communication bus error related to the AFE (grid input stage).
+      Can cause temporary PMC unavailability and reduced power. Often software/firmware-related if repeating.
+
+    safety_notes:
+      - If accompanied by power module derating/unavailability, also review the Power Modules Cluster
+      - Avoid repeated hard power cycles unless required; capture evidence for OEM
 
     decision_tree:
       start_node: KAFE0
       nodes:
+
         KAFE0:
           prompt: |
-            *AFE_COMMUNICATION_ERROR — Start*
-            Is this a one-off or frequent/repeating?
+            *AFE_COMMUNICATION_ERROR — Start (pattern check)*
+            Is this a one-off event or repeating/frequent?
           options:
             - label: "One-off"
               next: KAFE1
@@ -681,15 +858,35 @@ faults:
         KAFE1:
           prompt: |
             *One-off*
-            If it appears once, no action is typically necessary. Monitor.
+            - Monitor for recurrence
+            - Optional: controlled restart if unit is impacted
           options:
-            - label: "Back to menu"
-              next: __MENU_KEMPOWER__
+            - label: "✅ Resolved / Not recurring"
+              next: KAFE_DONE_RESOLVED
+            - label: "It came back"
+              next: KAFE2
 
         KAFE2:
           prompt: |
             *Repeating*
-            Update firmware/software to latest release and escalate if it continues.
+            Recommended:
+            - Check firmware/software version
+            - If updates pending, apply per process
+            - If already current, escalate with frequency + cabinet context
+          options:
+            - label: "Collect evidence"
+              next: KAFE_LOGS
+            - label: "Back to Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KAFE_LOGS:
+          prompt: |
+            🗂️ *Evidence pack*
+            Capture:
+            - Frequency (per day/week) + whether it clears on restart
+            - Cabinet/module context (if shown)
+            - Firmware/software version
+            - Timestamps + HMI screenshots
           options:
             - label: "Escalate"
               next: KAFE_ESC
@@ -698,35 +895,72 @@ faults:
 
         KAFE_ESC:
           prompt: |
-            *Escalate*
-            Provide: frequency, cabinet/module affected, firmware version, timestamps.
+            *Escalate — AFE_COMMUNICATION_ERROR*
+            Provide:
+            - frequency + impact (derate/unavailable?)
+            - firmware version
+            - timestamps + screenshots
+            - any steps attempted (restart, update)
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
+        KAFE_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            No recurrence observed.
+            Before leaving:
+            - Note event + timestamp
+            - Confirm output normal / no derate
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  # ============================================================
+  # FAN_CURRENT (gold-standard lite)
+  # Keep ID stable: kempower_fan_current
+  # ============================================================
 
   - id: kempower_fan_current
     platform: kempower
     charger_type: dc
     title: "Cooling Fan Electrical Fault (Fan Current Out of Range)"
-    aliases: ["fan current", "fan fault", "thermal performance reduced"]
-    triggers:
-      any_text_contains: ["FAN_CURRENT", "fan_current"]
     severity: medium
     tags: [fan, cooling, airflow, firmware, pmc]
 
+    aliases:
+      - "FAN_CURRENT"
+      - "fan_current"
+      - "fan current"
+      - "fan fault"
+      - "thermal performance reduced"
+
+    triggers:
+      any_text_contains:
+        - "FAN_CURRENT"
+        - "fan_current"
+        - "fan current"
+        - "thermal performance reduced"
+
     description: >
-      Fan current out of range; output reduced and thermal performance reduced.
+      Fan current is out of expected range. The unit may derate to protect itself.
+      Causes include blocked airflow/filters, failing fan, wiring/connector issue, or control/firmware edge cases.
+
+    safety_notes:
+      - Keep hands/tools clear of moving fans
+      - If overheating is present, allow cooldown and avoid repeated sessions until airflow is restored
 
     decision_tree:
       start_node: KFN0
       nodes:
+
         KFN0:
           prompt: |
-            *FAN_CURRENT — Start*
-            Is airflow obstructed / filters dirty / fan noise present?
+            *FAN_CURRENT — Start (pattern check)*
+            Do you observe airflow issues (blocked vents/dirty filters) or abnormal fan noise?
           options:
-            - label: "Yes"
+            - label: "Yes (airflow/noise issue)"
               next: KFN1
             - label: "No / unsure"
               next: KFN2
@@ -734,127 +968,260 @@ faults:
         KFN1:
           prompt: |
             *Airflow path*
-            Clear obstructions, check filters, confirm fans spin freely and are not noisy.
-            If needed, replace fans.
+            Actions:
+            - Clear external obstructions
+            - Check/clean filters (if accessible)
+            - Verify fans spin freely (visual/audible)
+            If a fan is not running or noisy: plan replacement.
           options:
-            - label: "Resolved"
-              next: KFN_DONE
-            - label: "Still failing"
-              next: KFN_ESC
+            - label: "Re-test"
+              next: KFN_RETEST
+            - label: "Collect evidence"
+              next: KFN_LOGS
 
         KFN2:
           prompt: |
-            *Standard recovery*
-            Remote restart → local restart → remote fault analysis. Update software to latest.
-            If persists, schedule site visit / replace fans.
+            *Recovery path*
+            - Controlled restart (remote if available → local)
+            - If repeating: check firmware version and update if required
+          options:
+            - label: "Re-test"
+              next: KFN_RETEST
+            - label: "Collect evidence"
+              next: KFN_LOGS
+
+        KFN_RETEST:
+          prompt: |
+            *Re-test*
+            Does the fan fault clear and does the unit stop derating?
+          options:
+            - label: "✅ Resolved (normal cooling/output)"
+              next: KFN_DONE_RESOLVED
+            - label: "⚠️ Still derating / fault persists"
+              next: KFN_DONE_STAB
+
+        KFN_LOGS:
+          prompt: |
+            🗂️ *Evidence pack*
+            Capture:
+            - Which cabinet/module (if shown)
+            - Fan noise/airflow observations + filter condition
+            - Ambient temperature
+            - Firmware/software version
+            - Timestamps + HMI screenshots
           options:
             - label: "Escalate"
               next: KFN_ESC
-            - label: "Done"
-              next: KFN_DONE
-
-        KFN_DONE:
-          prompt: |
-            *Complete*
-            ✅ Fan flow complete.
-          options:
-            - label: "Kempower menu"
+            - label: "Back to menu"
               next: __MENU_KEMPOWER__
 
         KFN_ESC:
           prompt: |
-            *Escalate*
-            Provide: cabinet/module, fan noise/airflow notes, software version, timestamps.
+            *Escalate — FAN_CURRENT*
+            Provide:
+            - cabinet/module context
+            - airflow/noise/filter observations
+            - firmware version
+            - timestamps + screenshots/photos
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
+        KFN_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            Cooling restored and fault cleared.
+            Before leaving:
+            - Confirm no recurrence during a short session
+            - Note what changed (filter clean, obstruction removed, restart)
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KFN_DONE_STAB:
+          prompt: |
+            ⚠️ *Stabilised (Derated)*
+            Charger may still operate but at reduced power to protect thermal limits.
+            Recommended:
+            - Document derate level and whether it’s stable/fluctuating
+            - Plan service visit (fan/filter/airflow)
+          options:
+            - label: "Escalate"
+              next: KFN_ESC
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  # ============================================================
+  # PRIMARY_UNDERVOLTAGE (gold-standard lite)
+  # Keep ID stable: kempower_primary_undervoltage
+  # ============================================================
 
   - id: kempower_primary_undervoltage
     platform: kempower
     charger_type: dc
     title: "Incoming Supply Too Low (Undervoltage / Phase Issue)"
-    aliases: ["primary undervoltage", "supply too low"]
-    triggers:
-      any_text_contains: ["PRIMARY_UNDERVOLTAGE", "primary_undervoltage"]
     severity: high
     tags: [grid, supply, undervoltage, wiring, pmc]
 
+    aliases:
+      - "PRIMARY_UNDERVOLTAGE"
+      - "primary_undervoltage"
+      - "primary undervoltage"
+      - "incoming supply too low"
+      - "supply too low"
+      - "phase issue"
+
+    triggers:
+      any_text_contains:
+        - "PRIMARY_UNDERVOLTAGE"
+        - "primary_undervoltage"
+        - "undervoltage"
+        - "supply too low"
+
     description: >
-      Primary circuit voltage too low; reduced power available; can relate to supply insufficiency or wiring/module issues.
+      Primary circuit voltage is below threshold. Can be genuine grid undervoltage (especially under load),
+      phase imbalance/loss, upstream limitation, or internal cabinet issues causing one stack to report low supply.
+
+    safety_notes:
+      - Live measurements only by authorised personnel using approved methods/PPE
+      - If a breaker trips repeatedly, do not keep resetting—investigate cause
 
     decision_tree:
       start_node: KUV0
       nodes:
+
         KUV0:
           prompt: |
-            *PRIMARY_UNDERVOLTAGE — Start*
-            Is site/grid voltage actually low (measure under load if possible)?
+            *PRIMARY_UNDERVOLTAGE — Start (pattern check)*
+            Can you confirm whether site/grid voltage is actually low (ideally under load)?
           options:
-            - label: "Yes (grid low)"
+            - label: "Yes (grid low confirmed)"
               next: KUV1
             - label: "No / unknown"
               next: KUV2
 
         KUV1:
           prompt: |
-            *Grid-side issue*
-            Confirm supply is sufficient for the unit; escalate to electricity distributor if needed.
+            *Grid-side issue likely*
+            Actions:
+            - Confirm site supply capacity vs charger rating
+            - Check if other equipment/site loads coincide
+            - Escalate to site electrician / distributor as appropriate
           options:
+            - label: "Collect evidence"
+              next: KUV_LOGS
             - label: "Back to menu"
               next: __MENU_KEMPOWER__
 
         KUV2:
           prompt: |
-            *Charger-side checks*
-            Check PMC breaker ON, inspect rear connector pins (not bent/broken), move module to another slot and see if fault follows.
-            If fault follows module → replace module.
+            *Charger-side checks (safe-first)*
+            Check:
+            - Upstream CB/isolator status
+            - Any phase-loss/imbalance alarms
+            - If shown: does undervoltage relate to a specific cabinet/PMC?
           options:
-            - label: "Resolved"
-              next: KUV_DONE
-            - label: "Still failing"
-              next: KUV_ESC
+            - label: "Do controlled restart"
+              next: KUV_RESTART
+            - label: "Collect evidence"
+              next: KUV_LOGS
 
-        KUV_DONE:
+        KUV_RESTART:
           prompt: |
-            *Complete*
-            ✅ Undervoltage flow complete.
+            *Controlled restart*
+            - Restart controller/HMI if available
+            - If persists: full power cycle per procedure
           options:
-            - label: "Kempower menu"
+            - label: "✅ Resolved"
+              next: KUV_DONE_RESOLVED
+            - label: "⚠️ Still present"
+              next: KUV_LOGS
+
+        KUV_LOGS:
+          prompt: |
+            🗂️ *Evidence pack*
+            Capture:
+            - Measured L-L voltages (and under-load if possible)
+            - Whether whole site affected vs one cabinet
+            - Any phase imbalance/phase loss indicators
+            - Timestamps + screenshots
+          options:
+            - label: "Escalate"
+              next: KUV_ESC
+            - label: "Back to menu"
               next: __MENU_KEMPOWER__
 
         KUV_ESC:
           prompt: |
-            *Escalate*
-            Provide: measured L-L voltages under load, which PMC slot, connector inspection result.
+            *Escalate — PRIMARY_UNDERVOLTAGE*
+            Provide:
+            - voltage measurements + method/context (load/no-load)
+            - cabinet/stack context (if any)
+            - timestamps + screenshots
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
 
+        KUV_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            Undervoltage cleared and unit operating normally.
+            Before leaving:
+            - Confirm stable voltage + no recurrence during short session
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  # ============================================================
+  # RT_SAFETY_ERROR_IN_THIS_PMC (gold-standard lite, safety heavy)
+  # Keep ID stable: kempower_rt_safety_error_in_this_pmc
+  # ============================================================
 
   - id: kempower_rt_safety_error_in_this_pmc
     platform: kempower
     charger_type: dc
     title: "Electrical Safety Fault Detected (Isolation / Moisture Risk)"
-    aliases: ["rt safety error", "isolation fault", "pmc safety error"]
-    triggers:
-      any_text_contains: ["RT_SAFETY_ERROR_IN_THIS_PMC", "rt_safety_error_in_this_pmc"]
     severity: critical
     tags: [safety, insulation, isolation, water_ingress, dpdm, maintenance]
 
+    aliases:
+      - "RT_SAFETY_ERROR_IN_THIS_PMC"
+      - "rt_safety_error_in_this_pmc"
+      - "rt safety error"
+      - "isolation fault"
+      - "pmc safety error"
+      - "moisture risk"
+
+    triggers:
+      any_text_contains:
+        - "RT_SAFETY_ERROR_IN_THIS_PMC"
+        - "rt_safety_error_in_this_pmc"
+        - "isolation"
+        - "safety error"
+
     description: >
-      Indication of isolation issue; charging cannot continue safely; may trigger self-check; often related to moisture/water ingress and maintenance.
+      Safety monitoring indicates an isolation/leakage risk associated with a specific PMC/cabinet.
+      Often moisture/water ingress, contamination, cable gland/seal failure, or internal insulation degradation.
+      Treat as safety-critical and avoid repeated operation attempts.
+
+    safety_notes:
+      - Do not continue charging attempts until assessed; risk of dangerous leakage
+      - Apply LOTO before opening cabinets; discharge requirements apply
+      - Insulation/IR tests only by authorised personnel using approved methods
 
     decision_tree:
       start_node: KISO0
       nodes:
+
         KISO0:
           prompt: |
-            *RT_SAFETY_ERROR_IN_THIS_PMC — Start*
+            *RT_SAFETY_ERROR_IN_THIS_PMC — Start (safety gate)*
             Treat as *safety critical*.
-            Is there any evidence of water ingress / moisture marks?
+            Any evidence of water ingress / moisture marks / condensation?
           options:
-            - label: "Yes"
+            - label: "Yes (moisture evidence)"
               next: KISO1
             - label: "No / unsure"
               next: KISO2
@@ -862,70 +1229,151 @@ faults:
         KISO1:
           prompt: |
             *Moisture path*
-            Inspect cabinet for water ingress and module front panels for moisture marks/buildup.
-            Review maintenance history (filters/PM intervals) and adjust frequency if needed.
+            Actions:
+            - Take affected cabinet/connector out of service
+            - Inspect seals, vents, cable glands, door gaskets (visual)
+            - Document moisture paths and condition
           options:
+            - label: "Collect evidence"
+              next: KISO_LOGS
             - label: "Escalate"
               next: KISO_ESC
 
         KISO2:
           prompt: |
             *Still treat seriously*
-            Perform the same inspection steps and escalate with evidence—do not keep running repeated sessions.
+            Even without obvious moisture:
+            - Avoid repeated sessions
+            - Document which PMC/cabinet is referenced
+            - Prepare for authorised insulation testing / OEM support
           options:
+            - label: "Collect evidence"
+              next: KISO_LOGS
             - label: "Escalate"
               next: KISO_ESC
 
-        KISO_ESC:
+        KISO_LOGS:
           prompt: |
-            *Escalate*
-            Provide: which PMC, photos of cabinet/modules, maintenance history notes, timestamps, any environmental factors.
+            🗂️ *Evidence pack*
+            Capture:
+            - Which PMC/cabinet
+            - Photos of cabinet condition (external + any visible moisture marks)
+            - Environmental conditions (rain, flooding, washdown, humidity)
+            - Maintenance history notes (filters/PM interval)
+            - Timestamps + HMI screenshots
           options:
-            - label: "Kempower menu"
+            - label: "Escalate"
+              next: KISO_ESC
+            - label: "Back to menu"
               next: __MENU_KEMPOWER__
 
+        KISO_ESC:
+          prompt: |
+            *Escalate — RT_SAFETY_ERROR_IN_THIS_PMC*
+            Provide:
+            - PMC/cabinet identification
+            - photos + environmental context
+            - maintenance history
+            - timestamps + screenshots
+          options:
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+
+  # ============================================================
+  # SSC_SELFTEST_INTERNAL_ERROR (gold-standard lite)
+  # Keep ID stable: kempower_ssc_selftest_internal_error
+  # ============================================================
 
   - id: kempower_ssc_selftest_internal_error
     platform: kempower
     charger_type: dc
     title: "Internal System Fault – Self-Test Failed"
-    aliases: ["ssc selftest internal error", "self check failed", "all connectors failed"]
-    triggers:
-      any_text_contains: ["SSC_SELFTEST_INTERNAL_ERROR", "ssc_selftest_internal_error"]
     severity: critical
     tags: [self_check, configuration, canbus, software, dpdm]
 
+    aliases:
+      - "SSC_SELFTEST_INTERNAL_ERROR"
+      - "ssc_selftest_internal_error"
+      - "ssc selftest internal error"
+      - "self test failed"
+      - "self-check failed"
+      - "all connectors failed"
+
+    triggers:
+      any_text_contains:
+        - "SSC_SELFTEST_INTERNAL_ERROR"
+        - "ssc_selftest_internal_error"
+        - "self-test failed"
+        - "self test failed"
+        - "self check failed"
+
     description: >
-      System self-check failed; may be due to outdated software vs hardware, CAN wiring/divider board issues; troubleshoot companion SSC errors first.
+      System self-test failed. Often triggered by companion SSC faults, configuration/hardware mismatch, or CAN wiring/divider board issues.
+      Best practice: resolve other SSC alarms first, then re-run self-test and escalate with inventory + firmware context.
+
+    safety_notes:
+      - Avoid repeated reboot loops without collecting evidence; you’ll lose timestamps/context
+      - If any safety/isolation alarms coexist, treat those as priority
 
     decision_tree:
       start_node: KST0
       nodes:
+
         KST0:
           prompt: |
-            *SSC_SELFTEST_INTERNAL_ERROR — Start*
-            Are other SSC codes present (e.g., SSC_CONNECTOR_VOLTAGE_MISSING)?
+            *SSC_SELFTEST_INTERNAL_ERROR — Start (pattern check)*
+            Are other SSC codes present (example: SSC_CONNECTOR_VOLTAGE_MISSING)?
           options:
-            - label: "Yes"
+            - label: "Yes (other SSC codes present)"
               next: KST1
-            - label: "No"
+            - label: "No (standalone self-test error)"
               next: KST2
 
         KST1:
           prompt: |
-            *Do the other SSC codes first*
-            Troubleshoot companion SSC codes first, then re-run self-check.
+            *Do companion SSC codes first*
+            - Troubleshoot the other SSC alarms first
+            - Then re-run self-test / restart and check if this clears
           options:
-            - label: "Back"
-              next: __MENU_KEMPOWER__
+            - label: "Re-test"
+              next: KST_RETEST
+            - label: "Collect evidence"
+              next: KST_LOGS
 
         KST2:
           prompt: |
             *Core system checks*
-            Perform inventory scan to confirm PMCs found.
-            Verify DPDM configured correctly (if dynamic).
-            Update software to latest available version.
-            Inspect CAN bus divider board installation/wiring/damage.
+            Recommended checks (as available):
+            - Inventory scan: confirm PMCs detected
+            - DPDM configuration correct (dynamic systems)
+            - Firmware/software version current
+            - CAN bus divider board installation/wiring/condition
+          options:
+            - label: "Re-test"
+              next: KST_RETEST
+            - label: "Collect evidence"
+              next: KST_LOGS
+
+        KST_RETEST:
+          prompt: |
+            *Re-test*
+            After addressing items above, does self-test pass and system become available?
+          options:
+            - label: "✅ Resolved"
+              next: KST_DONE_RESOLVED
+            - label: "⚠️ Still failing"
+              next: KST_LOGS
+
+        KST_LOGS:
+          prompt: |
+            🗂️ *Evidence pack*
+            Capture:
+            - Inventory scan results (PMCs found/missing)
+            - Firmware/software version
+            - Any other SSC codes + order of appearance
+            - Photos/notes of CAN divider board (if inspected)
+            - Timestamps + HMI screenshots
           options:
             - label: "Escalate"
               next: KST_ESC
@@ -934,8 +1382,24 @@ faults:
 
         KST_ESC:
           prompt: |
-            *Escalate*
-            Provide: inventory scan results, software version, CAN divider inspection notes, other SSC codes, timestamps.
+            *Escalate — SSC_SELFTEST_INTERNAL_ERROR*
+            Provide:
+            - inventory scan results
+            - firmware version
+            - CAN divider board notes
+            - other SSC codes
+            - timestamps + screenshots
           options:
-            - label: "Kempower menu"
+            - label: "🏠 Kempower menu"
+              next: __MENU_KEMPOWER__
+
+        KST_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            Self-test passed and system available.
+            Before leaving:
+            - Confirm stable operation (no immediate re-fault)
+            - Note what fixed it (SSC companion fix vs config vs update)
+          options:
+            - label: "🏠 Kempower menu"
               next: __MENU_KEMPOWER__
