@@ -7,6 +7,307 @@
 
 faults:
 
+  # ============================================================
+  # (1) GOLD STANDARD CLUSTER: Autel Power-Stage / HV Start Inhibit
+  # Canonical flow for:
+  # - Precharge / DC bus not building
+  # - DC output contactor cannot close / verify
+  # - HV enable inhibited by interlocks / insulation
+  # - "Charging won't start" when the root cause is internal power-stage
+  # ============================================================
+
+  - id: autel_power_stage_cluster
+    platform: autel
+    charger_type: dc
+    title: "Power-Stage / HV Start Inhibit (Precharge / DC Bus / Contactors)"
+    severity: critical
+    tags: [power_stage, hv_enable, precharge, dc_bus, contactor, interlock, insulation, start_inhibit]
+
+    aliases:
+      - "Power-stage fault"
+      - "HV start inhibited"
+      - "precharge fault"
+      - "pre-charge fault"
+      - "dc bus fault"
+      - "dc bus not ready"
+      - "dc bus undervoltage"
+      - "dc bus overvoltage"
+      - "dc contactor failed"
+      - "output contactor fault"
+      - "failed to close contactor"
+      - "hv enable fault"
+      - "start failed"
+      - "internal power fault"
+
+    triggers:
+      any_text_contains:
+        - "power-stage"
+        - "power stage"
+        - "hv start"
+        - "hv enable"
+        - "start inhibited"
+        - "start failed"
+        - "precharge"
+        - "pre-charge"
+        - "dc bus"
+        - "bus undervoltage"
+        - "bus overvoltage"
+        - "output contactor"
+        - "dc contactor"
+        - "failed to close"
+        - "contactor failed"
+        - "contactor fault"
+        - "welded contactor"
+        - "isolation"
+        - "insulation"
+        - "imd"
+        - "hvil"
+        - "interlock open"
+        - "door interlock"
+        - "e-stop"
+        - "estop"
+
+    description: >
+      The charger is preventing HV start or cannot complete the HV start sequence (enable → precharge → DC bus build →
+      contactor verification). This is commonly caused by interlock/insulation inhibits, unstable control power, supply
+      quality issues that disrupt precharge, failed/welded contactors, or a DC-bus condition that does not meet checks.
+
+    safety_notes:
+      - LOTO before opening cabinets; wait minimum 5 minutes for DC bus discharge
+      - Treat insulation/isolation alarms as high risk; do not repeatedly attempt sessions
+      - Do not bypass HVIL/interlocks; do not repeatedly reset trips
+
+    tools_required:
+      - Multimeter (true RMS preferred)
+      - Insulated hand tools
+      - Torch / inspection light
+      - IR thermometer (optional)
+
+    decision_tree:
+      start_node: PS0
+      nodes:
+
+        PS0:
+          prompt: |
+            *Autel — Power-Stage / HV Start Inhibit*
+            Start symptom-first. What are you seeing?
+          options:
+            - label: "🚫 Won’t start a session / start fails immediately"
+              next: PS_PATTERN_START_FAIL
+            - label: "⚠️ Starts then stops quickly / contactor clicks then faults"
+              next: PS_PATTERN_CLICKS_FAULTS
+            - label: "🟪 Insulation / isolation / IMD alarm present"
+              next: PS_ISO_GATE
+            - label: "⬛ E-Stop / Interlock / HVIL indicated"
+              next: PS_INTERLOCK_GATE
+            - label: "🔌 Supply unstable / undervoltage / phase issues suspected"
+              next: PS_SUPPLY_GATE
+            - label: "🔎 I have a specific code/message (precharge / DC bus / contactor)"
+              next: PS_CODE_HINTS
+
+        PS_PATTERN_START_FAIL:
+          prompt: |
+            *Pattern check — Start fails*
+            Does the charger show any explicit block reason (interlock, insulation, DC bus, contactor)?
+          options:
+            - label: "Yes — insulation/isolation"
+              next: PS_ISO_GATE
+            - label: "Yes — interlock/HVIL/E-stop"
+              next: PS_INTERLOCK_GATE
+            - label: "Yes — DC bus / precharge / contactor"
+              next: PS_DC_BUS_PATH
+            - label: "No obvious reason shown"
+              next: PS_SAFE_REBOOT
+
+        PS_PATTERN_CLICKS_FAULTS:
+          prompt: |
+            *Pattern check — Clicks then faults*
+            That’s commonly precharge/DC bus build or contactor verification. Proceed through safe-first recovery.
+          options:
+            - label: "Continue ➡️"
+              next: PS_SAFE_REBOOT
+
+        PS_CODE_HINTS:
+          prompt: |
+            *Quick routing (choose closest)*
+          options:
+            - label: "🟥 DC contactor failed / failed to close / verify"
+              next: PS_CONTACTOR_PATH
+            - label: "🟦 Precharge fault / DC bus not ready / DC bus undervoltage"
+              next: PS_DC_BUS_PATH
+            - label: "🟧 DC bus overvoltage"
+              next: PS_DC_BUS_OV_PATH
+            - label: "🟪 Insulation / isolation / IMD"
+              next: PS_ISO_GATE
+            - label: "⬛ Interlock / HVIL / E-stop"
+              next: PS_INTERLOCK_GATE
+            - label: "❓ Not sure"
+              next: PS_SAFE_REBOOT
+
+        PS_SAFE_REBOOT:
+          prompt: |
+            ✅ *Safe recovery first*
+            - Confirm no smoke/heat/water ingress
+            - Perform a controlled reboot / power cycle
+            - Re-check for the *first* fault that returns (that’s often the real root)
+          options:
+            - label: "Recovered ✅"
+              next: PS_DONE_RESOLVED
+            - label: "Still failing"
+              next: PS_VISUAL
+
+        PS_VISUAL:
+          prompt: |
+            👀 *Visual checks (no invasive work)*
+            - Burnt smell / discoloration / melted insulation?
+            - Water ingress / wet marks?
+            - Loose external connectors / obvious harness strain?
+          options:
+            - label: "🔥 Unsafe condition found"
+              next: PS_ESC_UNSAFE
+            - label: "Looks OK"
+              next: PS_SUPPLY_GATE
+
+        PS_SUPPLY_GATE:
+          prompt: |
+            ⚡ *Supply sanity check*
+            Is there any supply alarm (undervoltage/phase loss) or known site instability?
+          options:
+            - label: "Yes"
+              next: PS_SUPPLY_ACTIONS
+            - label: "No / unknown"
+              next: PS_INTERLOCK_GATE
+
+        PS_SUPPLY_ACTIONS:
+          prompt: |
+            *Supply actions (safe-first)*
+            - Check upstream breaker/isolator status
+            - If authorised: confirm L-L voltages are present and not sagging badly at enable
+            - If it’s a site issue: stabilise supply before deeper charger work
+          options:
+            - label: "Supply corrected → retry"
+              next: PS_SAFE_REBOOT
+            - label: "Supply seems OK → continue"
+              next: PS_INTERLOCK_GATE
+            - label: "Can’t verify → escalate"
+              next: PS_ESC
+
+        PS_INTERLOCK_GATE:
+          prompt: |
+            ⬛ *Interlock / HVIL gate*
+            If any interlock is open, HV start will be inhibited.
+            Clear interlocks first before chasing power-stage parts.
+          image: autel/interlock_chain_points
+          options:
+            - label: "Interlock cleared → retry"
+              next: PS_SAFE_REBOOT
+            - label: "Interlock won’t clear"
+              next: PS_ESC
+
+        PS_ISO_GATE:
+          prompt: |
+            🟪 *Isolation / IMD gate (high risk)*
+            Treat as safety critical:
+            - Avoid repeated start attempts
+            - Inspect for moisture/contamination at the connector and cabinet
+          options:
+            - label: "Moisture/contamination suspected"
+              next: PS_ISO_ACTIONS
+            - label: "No moisture obvious"
+              next: PS_ISO_ACTIONS
+
+        PS_ISO_ACTIONS:
+          prompt: |
+            *Isolation actions*
+            - Document the isolation/IMD message + timestamp
+            - Inspect connector face for water/debris/burn marks
+            - If repeatable across EVs/ports: tag out affected port and escalate
+          options:
+            - label: "Escalate"
+              next: PS_ESC
+            - label: "Back to Autel menu"
+              next: __MENU_AUTEL__
+
+        PS_DC_BUS_PATH:
+          prompt: |
+            🟦 *Precharge / DC bus path*
+            Common causes:
+            - Supply sag during enable
+            - Interlock inhibit (precharge never allowed)
+            - DC contactor/feedback causing abort
+            Proceed: supply → interlock → contactor verification → escalate.
+          options:
+            - label: "Continue ➡️"
+              next: PS_CONTACTOR_PATH
+
+        PS_DC_BUS_OV_PATH:
+          prompt: |
+            🟧 *DC bus overvoltage*
+            Do NOT repeatedly retry. Capture evidence and escalate.
+          options:
+            - label: "Escalate"
+              next: PS_ESC
+            - label: "Back to Autel menu"
+              next: __MENU_AUTEL__
+
+        PS_CONTACTOR_PATH:
+          prompt: |
+            🟥 *Contactor verification path*
+            If you also have a "DC contactor" alarm, use the DC Contactor fault entry as the *label*,
+            but this cluster remains the canonical troubleshooting path.
+          options:
+            - label: "Continue ➡️"
+              next: PS_LOGS
+
+        PS_LOGS:
+          prompt: |
+            🗂️ *Evidence pack (for fast escalation)*
+            Capture:
+            - Exact message/code + timestamp
+            - Whether it clicks (precharge/contactor attempt) or not
+            - Any supply alarms
+            - Interlock status
+          options:
+            - label: "Escalate"
+              next: PS_ESC
+            - label: "Back to Autel menu"
+              next: __MENU_AUTEL__
+
+        PS_ESC_UNSAFE:
+          prompt: |
+            *⚠️ Escalate immediately — unsafe condition*
+            Do NOT re-energise.
+            Provide photos + what you observed (smell/heat/water ingress).
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        PS_ESC:
+          prompt: |
+            *Escalate — Autel Power-Stage / HV Start Inhibit*
+            Include:
+            - Exact code/text + timestamps
+            - State: start fails vs clicks then faults
+            - Supply notes (any undervoltage/phase issues)
+            - Interlock/IMD status
+            - Actions taken (reboot/power cycle)
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        PS_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            HV start restored. Run a short test session and confirm no recurrence.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+
+  # ============================================================
+  # (2) ROUTER: AC Contactor Fault (ID stable; routes into cluster)
+  # ============================================================
+
   - id: autel_ac_contactor_fault
     platform: autel
     charger_type: dc
@@ -22,7 +323,6 @@ faults:
     triggers:
       any_text_contains:
         - "ac contactor"
-        - "contactor fault"
         - "contactor feedback"
         - "input contactor"
         - "main contactor"
@@ -31,230 +331,38 @@ faults:
     tags: [power, input, contactor, interlock, feedback, three_phase]
 
     description: >
-      The charger cannot close or verify the main AC input contactor.
-      Most commonly caused by missing/unstable 3-phase supply, undervoltage on the control PSU,
-      an open interlock, coil/aux wiring issues, or a failed contactor.
-
-    likely_causes:
-      - Missing phase / supply imbalance or sag during pull-in
-      - Low control PSU voltage / undervoltage
-      - Interlock open (door, E-stop chain, safety loop)
-      - Coil wiring / auxiliary feedback wiring loose or damaged
-      - Failed contactor (coil/mechanism/contacts)
-
-    safety_notes:
-      - LOTO before opening cabinet; wait minimum 5 minutes for DC bus discharge
-      - Verify absence of voltage with an approved meter before touching conductors
-
-    tools_required:
-      - Multimeter (true RMS preferred)
-      - Insulated hand tools
-
-    response:
-      telegram_markdown: |
-        *Autel DC — AC Contactor Fault*
-        The charger cannot close or verify the main AC input contactor.
-
-        Most common causes:
-        • Missing phase / imbalance
-        • Low control PSU voltage
-        • Aux feedback or coil wiring fault
-        • Interlock open
-        • Failed contactor
-
-    report_template:
-      summary: >
-        AC input contactor fault identified during diagnostics. Corrective actions were carried out
-        to restore stable AC contactor pull-in and clear the fault.
-      actions:
-        - "Applied LOTO and verified safe state (DC bus discharged)"
-        - "Verified 3-phase supply present and within tolerance (imbalance/sag check)"
-        - "Checked interlock chain continuity (doors/E-stop/safety loop)"
-        - "Measured AC contactor coil command voltage during close attempt"
-        - "Inspected/secured coil wiring and auxiliary feedback wiring"
-        - "Power cycled charger and confirmed contactor pull-in"
-        - "Cleared faults and completed functional test session"
-      parts_used:
-        - "AC input contactor (if replaced)"
-      verification:
-        - "No active faults present"
-        - "Successful charging session confirmed"
+      Routed fault: AC input contactor issues are diagnosed through the Power-Stage / HV Start Inhibit cluster.
+      (This keeps the ID stable for deep-links while consolidating troubleshooting.)
 
     decision_tree:
-      start_node: A0
+      start_node: RAC0
       nodes:
-        A0:
+        RAC0:
           prompt: |
-            *AC Contactor Fault — Start*
-            Is the fault active right now, or only intermittent?
-          options:
-            - label: "Fault active"
-              next: A1
-            - label: "Intermittent"
-              next: A2
+            *AC Contactor Fault — Routed to Power-Stage Cluster*
+            This fault is now handled by the *Power-Stage / HV Start Inhibit* flow (canonical).
 
-        A1:
-          prompt: |
-            *Check site supply*
-            Confirm 3-phase is present and stable (no missing phase/major imbalance).
+            Why:
+            - AC contactor issues are usually supply/PSU/interlock/enable-chain problems
+            - Those checks are shared with precharge/DC bus/contactors
           options:
-            - label: "Supply OK"
-              next: A3
-            - label: "Missing phase"
-              next: FIX_SUPPLY
-
-        A2:
-          prompt: |
-            *Intermittent pattern*
-            Treat this like a supply/connection/PSU sag issue until proven otherwise. Continue through checks.
-          options:
-            - label: "Continue"
-              next: A1
-
-        A3:
-          prompt: |
-            *Power cycle & check pull-in*
-            Power cycle and listen/observe: does the AC contactor pull in cleanly?
-          image: autel/ac_contactor_location
-          options:
-            - label: "Cleared"
-              next: MONITOR
-            - label: "No pull-in"
-              next: A4
-            - label: "Chatter"
-              next: A5
-            - label: "Clunks but fault remains"
-              next: A6
-
-        A4:
-          prompt: |
-            *No pull-in*
-            Work out whether it’s being *blocked* (interlock), *not commanded* (no coil voltage),
-            or *failed* (coil voltage present but no pull-in).
-          image: autel/interlock_chain_points
-          options:
-            - label: "Interlock open"
-              next: FIX_INTERLOCK
-            - label: "No coil voltage"
-              next: A7
-            - label: "Voltage present"
-              next: REPLACE_CONTACTOR
-
-        A5:
-          prompt: |
-            *Chatter / weak pull-in*
-            Usually undervoltage (supply sag / weak control PSU) or a failing contactor.
-          image: autel/control_psu_location
-          options:
-            - label: "Voltage sag"
-              next: FIX_PSU_OR_SUPPLY
-            - label: "Voltage OK"
-              next: REPLACE_CONTACTOR
-
-        A6:
-          prompt: |
-            *Clunks but fault remains*
-            Contactor may be moving, but the system can’t verify it. Focus on aux feedback circuit.
-          image: autel/aux_feedback_terminals
-          options:
-            - label: "Feedback fault"
-              next: FIX_AUX_FEEDBACK
-            - label: "Feedback OK"
-              next: A8
-
-        A7:
-          prompt: |
-            *No coil command*
-            No coil voltage typically points to PSU undervoltage, an open interlock, wiring break, or controller output issue.
-          image: autel/control_psu_location
-          options:
-            - label: "PSU / undervoltage"
-              next: FIX_PSU_OR_SUPPLY
-            - label: "Interlock"
-              next: FIX_INTERLOCK
-            - label: "Wiring"
-              next: FIX_WIRING
-            - label: "Controller"
-              next: ESCALATE_AUTEL
-
-        A8:
-          prompt: |
-            *Firmware / config check*
-            If supply/pull-in/feedback look OK but it still faults, check firmware/config/logs then escalate if needed.
-          options:
-            - label: "Resolved"
-              next: MONITOR
-            - label: "Still faulting"
-              next: ESCALATE_AUTEL
-
-        FIX_SUPPLY:
-          prompt: |
-            *Fix supply issue*
-            Restore correct 3-phase supply (phase present, within spec, balanced). Then re-test.
-          options:
-            - label: "Re-test"
-              next: A3
-
-        FIX_INTERLOCK:
-          prompt: |
-            *Fix interlock*
-            Identify which interlock is open (door, E-stop chain, safety loop) and restore continuity. Then re-test.
-          image: autel/interlock_chain_points
-          options:
-            - label: "Re-test"
-              next: A3
-
-        FIX_AUX_FEEDBACK:
-          prompt: |
-            *Fix aux feedback*
-            Repair/secure aux feedback wiring and confirm state change during pull-in/pull-out. Then re-test.
-          image: autel/aux_feedback_terminals
-          options:
-            - label: "Re-test"
-              next: A3
-
-        FIX_PSU_OR_SUPPLY:
-          prompt: |
-            *Fix PSU / undervoltage*
-            Address control PSU undervoltage or supply sag during pull-in (connections, PSU health, upstream quality). Then re-test.
-          image: autel/control_psu_location
-          options:
-            - label: "Re-test"
-              next: A3
-
-        FIX_WIRING:
-          prompt: |
-            *Fix wiring*
-            Repair/secure coil wiring and related harnessing (loose terminals, damaged conductors, heat issues). Then re-test.
-          options:
-            - label: "Re-test"
-              next: A3
-
-        REPLACE_CONTACTOR:
-          prompt: |
-            *Replace AC contactor*
-            Coil voltage present but no reliable pull-in = likely failed contactor. Replace and function test.
-          image: autel/ac_contactor_location
-          options:
-            - label: "Re-test"
-              next: A3
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate to Autel*
-            Include: site voltages, coil command findings, interlock status, feedback checks, and timestamps/logs.
-          options:
-            - label: "Back to start"
-              next: A0
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and monitor for recurrence.
-          options:
-            - label: "Autel menu"
+            - label: "➡️ Open Power-Stage / HV Start Inhibit flow"
+              next: RAC1
+            - label: "🏠 Back to Autel menu"
               next: __MENU_AUTEL__
 
+        RAC1:
+          prompt: |
+            Select the *Power-Stage / HV Start Inhibit* fault from the Autel menu and follow that flow.
+            (This keeps everything consistent across related faults.)
+          options:
+            - label: "🏠 Autel menu"
+              next: __MENU_AUTEL__
+
+
+  # ============================================================
+  # (3) ROUTER: DC Contactor Fault (ID stable; routes into cluster)
+  # ============================================================
 
   - id: autel_dc_contactor_fault
     platform: autel
@@ -264,176 +372,37 @@ faults:
     tags: [dc, contactor, output, hv, safety]
 
     description: >
-      The charger is unable to close or verify the DC output contactor.
-      Most causes are interlock inhibits, missing coil command, undervoltage/PSU issues,
-      wiring faults, auxiliary feedback issues, or a failed/welded contactor.
-
-    likely_causes:
-      - Interlock preventing closure
-      - No coil command from controller
-      - Coil wiring/terminals loose or damaged
-      - PSU undervoltage or voltage sag at pull-in
-      - Failed or welded DC contactor / feedback fault
-
-    safety_notes:
-      - LOTO before cabinet access; wait minimum 5 minutes for DC bus discharge
-      - Verify safe state before touching DC contactor/DC bus components
-
-    tools_required:
-      - Multimeter (true RMS preferred)
-      - Insulated hand tools
-
-    report_template:
-      summary: >
-        DC output contactor fault identified during diagnostics. Corrective actions were carried out
-        to restore reliable DC contactor closure and confirm operation under load.
-      actions:
-        - "Applied LOTO and verified safe state (DC bus discharged)"
-        - "Power cycled charger and observed DC contactor close attempt"
-        - "Measured DC contactor coil voltage during close command"
-        - "Inspected/secured DC contactor coil wiring and auxiliary feedback wiring"
-        - "Removed faulted DC contactor (if required)"
-        - "Bench tested contactor using external power supply (coil energisation / mechanical operation)"
-        - "Installed replacement DC contactor (if required)"
-        - "Cleared faults and tested charger with electric vehicle"
-      parts_used:
-        - "DC contactor (if replaced)"
-      verification:
-        - "No active faults present"
-        - "Successful charging session confirmed"
+      Routed fault: DC output contactor verification failures are diagnosed through the Power-Stage / HV Start Inhibit cluster.
+      (This keeps the ID stable for deep-links while consolidating troubleshooting.)
 
     decision_tree:
-      start_node: D0
+      start_node: RDC0
       nodes:
-        D0:
+        RDC0:
           prompt: |
-            *DC Contactor Fault — Start*
-            Is the fault active right now, or intermittent?
-          options:
-            - label: "Fault active"
-              next: D1
-            - label: "Intermittent"
-              next: D2
+            *DC Contactor Fault — Routed to Power-Stage Cluster*
+            This is now handled by the *Power-Stage / HV Start Inhibit* flow (canonical).
 
-        D1:
-          prompt: |
-            *Power cycle and observe*
-            Power cycle and observe contactor behaviour (close attempt, pull-in, and whether the fault clears).
-          image: autel/dc_contactor_location
+            Why:
+            - DC contactor faults overlap precharge/DC bus enable + interlock/IMD gates
+            - One gold-standard flow reduces duplicated procedures and tech confusion
           options:
-            - label: "Cleared"
-              next: MONITOR
-            - label: "No pull-in"
-              next: D3
-            - label: "Closes but faults"
-              next: D6
-
-        D2:
-          prompt: |
-            *Intermittent behaviour*
-            Intermittent faults are often loose wiring, thermal movement, or PSU/supply sag. Continue through checks.
-          options:
-            - label: "Continue"
-              next: D1
-
-        D3:
-          prompt: |
-            *Check coil voltage*
-            Measure whether coil voltage is present during the close command.
-            This tells you if it’s a command/inhibit issue vs contactor/mechanical failure.
-          image: autel/dc_contactor_location
-          options:
-            - label: "No voltage"
-              next: D4
-            - label: "Voltage present"
-              next: REPLACE_CONTACTOR
-            - label: "Voltage sags"
-              next: FIX_PSU
-
-        D4:
-          prompt: |
-            *No coil command*
-            No coil voltage typically points to an interlock inhibit, wiring issue, or controller output fault.
-          image: autel/interlock_chain_points
-          options:
-            - label: "Interlock"
-              next: FIX_INTERLOCK
-            - label: "Wiring"
-              next: FIX_WIRING
-            - label: "Controller"
-              next: ESCALATE_AUTEL
-
-        D6:
-          prompt: |
-            *Aux feedback / verification*
-            If it closes but faults, check auxiliary feedback circuit or welded contactor condition.
-          image: autel/aux_feedback_terminals
-          options:
-            - label: "Feedback fault"
-              next: FIX_AUX_FEEDBACK
-            - label: "Welded"
-              next: REPLACE_CONTACTOR
-
-        FIX_PSU:
-          prompt: |
-            *Fix PSU / undervoltage*
-            Address control power stability and confirm voltage holds during pull-in. Then re-test.
-          image: autel/control_psu_location
-          options:
-            - label: "Re-test"
-              next: D1
-
-        FIX_INTERLOCK:
-          prompt: |
-            *Fix interlock*
-            Identify the open interlock (door, E-stop chain, safety loop) and restore continuity. Then re-test.
-          image: autel/interlock_chain_points
-          options:
-            - label: "Re-test"
-              next: D1
-
-        FIX_WIRING:
-          prompt: |
-            *Fix wiring*
-            Repair/secure coil wiring and harness connections (loose terminals, heat damage). Then re-test.
-          options:
-            - label: "Re-test"
-              next: D1
-
-        FIX_AUX_FEEDBACK:
-          prompt: |
-            *Fix aux feedback*
-            Repair/secure auxiliary feedback wiring and confirm state change. Then re-test.
-          image: autel/aux_feedback_terminals
-          options:
-            - label: "Re-test"
-              next: D1
-
-        REPLACE_CONTACTOR:
-          prompt: |
-            *Replace DC contactor*
-            Coil voltage present but unreliable/no operation = likely failed/welded contactor. Replace and function test.
-          image: autel/dc_contactor_location
-          options:
-            - label: "Re-test"
-              next: D1
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate to Autel*
-            Include: coil voltage findings, interlock status, wiring checks performed, and timestamps/logs.
-          options:
-            - label: "Back"
-              next: D0
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and monitor for recurrence.
-          options:
-            - label: "Autel menu"
+            - label: "➡️ Open Power-Stage / HV Start Inhibit flow"
+              next: RDC1
+            - label: "🏠 Back to Autel menu"
               next: __MENU_AUTEL__
 
+        RDC1:
+          prompt: |
+            Select the *Power-Stage / HV Start Inhibit* fault from the Autel menu and follow that flow.
+          options:
+            - label: "🏠 Autel menu"
+              next: __MENU_AUTEL__
+
+
+  # ============================================================
+  # (4) Backend / OCPP Communication Fault
+  # ============================================================
 
   - id: autel_backend_ocpp_comms_fault
     platform: autel
@@ -445,22 +414,6 @@ faults:
     description: >
       The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
       If basic recovery fails, investigate SIM/APN, carrier/signal issues, DNS/time sync, and backend firewall/whitelisting.
-
-    likely_causes:
-      - SIM not registered on packet data / provisioning issue
-      - Incorrect APN settings
-      - Carrier outage/throttling or poor signal/antenna issue
-      - DNS or time sync issues affecting TLS/OCPP handshake
-      - Backend firewall/whitelist blocking private IP ranges
-
-    safety_notes:
-      - Most checks are low risk and can be done without entering HV compartments
-      - Follow ESD precautions if accessing comms hardware
-
-    tools_required:
-      - Phone/laptop for hotspot testing (if permitted)
-      - Access to APN/back-end requirements
-      - Known-good SIM (optional)
 
     decision_tree:
       start_node: C0
@@ -488,7 +441,7 @@ faults:
             *Next step*
             If reboot did not restore comms, either escalate or perform advanced SIM/network checks.
           options:
-            - label: "📈 Escalate (standard)"
+            - label: "📈 Escalate"
               next: ESCALATE_AUTEL
             - label: "🧠 Deep dive — advanced checks"
               next: ADVANCED_SIM_NETWORK
@@ -496,14 +449,13 @@ faults:
         ADVANCED_SIM_NETWORK:
           prompt: |
             🧠 *Deep Dive — SIM / Network / OCPP*
-            Check these advanced causes:
-            • SIM registered on GSM only (no packet data)
-            • Incorrect APN
-            • Carrier outage or throttling
-            • Private IP blocked by backend firewall
-            • DNS or time sync issues
+            Check:
+            • SIM provisioning / packet data
+            • APN
+            • Carrier outage / poor signal
+            • DNS/time sync affecting TLS
           options:
-            - label: "Issue fixed"
+            - label: "Issue fixed → reboot"
               next: C1
             - label: "No issue found"
               next: ESCALATE_AUTEL
@@ -526,6 +478,10 @@ faults:
               next: __MENU_AUTEL__
 
 
+  # ============================================================
+  # (5) Overtemperature / Cooling Fault
+  # ============================================================
+
   - id: autel_overtemp_cooling_fault
     platform: autel
     charger_type: dc
@@ -536,21 +492,6 @@ faults:
     description: >
       Overtemperature indicates the charger is exceeding thermal limits or has detected inadequate cooling.
       Most common field cause is blocked airflow (dirty filters/vents). Fan faults or poor ventilation can also trigger it.
-
-    likely_causes:
-      - Dirty/blocked filters or intake vents
-      - Fan failure or obstruction
-      - Poor cabinet ventilation / recirculation
-      - High ambient temperature / direct sun load
-
-    safety_notes:
-      - Start with external airflow/filter checks where possible
-      - Follow LOTO requirements for internal fan inspection
-
-    tools_required:
-      - Torch / inspection light
-      - Basic hand tools for filter access (if required)
-      - IR thermometer (optional)
 
     decision_tree:
       start_node: T0
@@ -604,14 +545,6 @@ faults:
             - label: "Re-test"
               next: MONITOR
 
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate thermal fault*
-            Include: ambient conditions, fan operation observations, filter condition, and any temp/log readings.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
         MONITOR:
           prompt: |
             *Monitor*
@@ -620,6 +553,10 @@ faults:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
+
+  # ============================================================
+  # (6) Power Module Fault (kept — still useful as a label/entry)
+  # ============================================================
 
   - id: autel_power_module_fault
     platform: autel
@@ -631,21 +568,6 @@ faults:
     description: >
       A power module is offline or reporting a module fault. Start with reseating to rule out poor seating or connection.
       If it remains offline, suspect module failure, cooling trip, or controller/comms issue.
-
-    likely_causes:
-      - Module not seated correctly / loose connections
-      - Internal comms issue between module and controller
-      - Cooling-related trip (fan/airflow/filter)
-      - Failed power module
-
-    safety_notes:
-      - LOTO before access; wait minimum 5 minutes for DC bus discharge
-      - Verify safe state before handling modules
-
-    tools_required:
-      - Torch / inspection light
-      - Basic hand tools for access
-      - Multimeter (as needed)
 
     decision_tree:
       start_node: P0
@@ -670,58 +592,100 @@ faults:
 
         P2:
           prompt: |
-            *Check cooling basics*
-            If modules are tripping offline, confirm airflow/filters and fans are OK.
-          image: autel/cooling_filters_location
+            *If still offline*
+            If you now also see start-inhibit/precharge/contactors, use the *Power-Stage / HV Start Inhibit* flow.
           options:
-            - label: "Filters / airflow OK"
-              next: ESCALATE_AUTEL
-            - label: "Filters dirty"
-              next: FIX_FILTERS
-            - label: "Check fans"
-              next: CHECK_FANS
-
-        CHECK_FANS:
-          prompt: |
-            *Check cooling fans*
-            Confirm fans are operating and unobstructed.
-          image: autel/cooling_fan_location
-          options:
-            - label: "Fans OK"
-              next: ESCALATE_AUTEL
-            - label: "Fan issue"
-              next: FIX_FANS
-
-        FIX_FILTERS:
-          prompt: |
-            *Clean filters*
-            Clean/replace filters then re-test module stability under load.
-          image: autel/cooling_filters_location
-          options:
-            - label: "Re-test"
-              next: P1
-
-        FIX_FANS:
-          prompt: |
-            *Fix fan issue*
-            Clear obstruction, check connectors, replace fan if failed. Then re-test.
-          image: autel/cooling_fan_location
-          options:
-            - label: "Re-test"
-              next: P1
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate power module*
-            Include: module ID/slot, any LEDs/error codes, actions taken (reseat), cooling status, and timestamps/logs.
-          options:
-            - label: "Autel menu"
+            - label: "🏠 Autel menu"
               next: __MENU_AUTEL__
 
         MONITOR:
           prompt: |
             *Monitor*
             Run a test session and confirm stable module operation.
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+
+  # ============================================================
+  # (7) TCU Communication Error (as requested)
+  # ============================================================
+
+  - id: autel_tcu_communication_error
+    platform: autel
+    charger_type: dc
+    title: "TCU Communication Error (Telematics/Comms Module)"
+    severity: high
+    tags: [tcu, comms, modem, controller, network, ocpp]
+
+    triggers:
+      any_text_contains:
+        - "tcu communication"
+        - "tcu comm"
+        - "tcu comms"
+        - "tcu offline"
+        - "tcu not responding"
+        - "telematics"
+        - "communication with tcu"
+
+    description: >
+      Controller cannot communicate reliably with the TCU. Often presents as intermittent offline events, failed backend
+      registration, or repeated comms alarms. Common causes are control power instability, loose harnessing, modem/TCU crash,
+      SIM/network problems, or controller-side comms issues.
+
+    decision_tree:
+      start_node: TCU0
+      nodes:
+        TCU0:
+          prompt: |
+            *TCU Communication Error — Start*
+            Is the charger also showing OCPP/backend offline?
+          options:
+            - label: "✅ Yes (offline as well)"
+              next: TCU1
+            - label: "❌ No (charging works / backend ok)"
+              next: TCU2
+
+        TCU1:
+          prompt: |
+            *TCU + Backend impacted*
+            Start with controlled reboot to recover modem/TCU stack.
+          options:
+            - label: "Reboot / power cycle"
+              next: TCU_REBOOT
+            - label: "Back"
+              next: __MENU_AUTEL__
+
+        TCU2:
+          prompt: |
+            *TCU alarm but backend ok*
+            Treat as intermittent comms/harness/power stability issue.
+          options:
+            - label: "Continue ➡️"
+              next: TCU_REBOOT
+
+        TCU_REBOOT:
+          prompt: |
+            *Controlled reboot / power cycle*
+            Reboot via HMI/service menu if available; otherwise controlled power cycle.
+          options:
+            - label: "Resolved ✅"
+              next: TCU_MONITOR
+            - label: "Still faulting"
+              next: TCU_ESC
+
+        TCU_MONITOR:
+          prompt: |
+            *Monitor*
+            Confirm stability (no repeated offline/TCU alarms).
+          options:
+            - label: "Autel menu"
+              next: __MENU_AUTEL__
+
+        TCU_ESC:
+          prompt: |
+            *Escalate — TCU Communication Error*
+            Include: alarm text + timestamps/frequency, backend impact, and recovery attempts.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
