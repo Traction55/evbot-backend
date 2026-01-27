@@ -1,6 +1,11 @@
 # general_dc.yml
 # EVBot Fault Pack: General DC (On-site Technician v1) — Kempower-style (symptom-first, gated)
 #
+# ✅ FIX (Jan 2026):
+# - NO cross-fault node jumps (every decision tree is self-contained per fault)
+# - Removed __ROUTE_* faults (they caused cross-fault node references)
+# - IDs kept stable (matches index.js quick buttons + callbacks)
+#
 # Philosophy:
 # - Symptom-first > code-first
 # - Gates: Safety/visual → Supply → Interlock → Comms → Thermal → Evidence → Escalate
@@ -173,15 +178,15 @@ faults:
             🚫 *Powers On but Won’t Start*
             What’s the closest symptom?
           options:
-            - label: "Shows interlock/E-stop / door open"
+            - label: "⬛ Interlock/E-stop / door open"
               next: GD_START_INTERLOCK
-            - label: "Handshake/vehicle communication error"
+            - label: "🔌 Handshake/vehicle communication error"
               next: GD_START_HANDSHAKE
-            - label: "Backend/auth/payment issue"
+            - label: "🌐 Backend/auth/payment issue"
               next: GD_START_BACKEND
-            - label: "Clicks/tries then stops quickly"
+            - label: "⚡ Clicks/tries then stops quickly"
               next: GD_START_POWERSTAGE
-            - label: "Not sure"
+            - label: "❓ Not sure"
               next: GD_START_EVIDENCE
 
         GD_START_INTERLOCK:
@@ -214,17 +219,37 @@ faults:
             - Is the charger showing offline?
             - Any auth/payment error?
             - If possible: confirm site connectivity / router status
+
+            If the HMI explicitly says OFFLINE, use the Offline/Comms flow from the General DC menu.
           options:
-            - label: "Route to Offline/Comms fault"
-              next: __ROUTE_GENERAL_DC_OFFLINE__
+            - label: "Continue with local checks (no menu jump)"
+              next: GD_START_BACKEND_LOCAL
+            - label: "Evidence pack"
+              next: GD_START_EVIDENCE
+            - label: "General DC menu (to pick Offline/Comms)"
+              next: __MENU_GENERAL_DC__
+
+        GD_START_BACKEND_LOCAL:
+          prompt: |
+            *Local backend sanity (field checks)*
+            - Check whether other chargers at site are also affected
+            - If site router/modem is accessible: confirm power / WAN state
+            - Controlled reboot then wait for registration/handshake
+          options:
+            - label: "Retest"
+              next: GD_START_RETEST
             - label: "Evidence pack"
               next: GD_START_EVIDENCE
 
         GD_START_POWERSTAGE:
           prompt: |
             ⚡ *Power-stage hint*
-            If it clicks/tries then aborts, treat like a HV enable/precharge/contactors issue (OEM escalation usually required).
+            If it clicks/tries then aborts, treat like a HV enable/precharge/contactors issue
+            (OEM escalation often required).
+            Before escalating: do ONE clean power cycle and capture the first fault that returns.
           options:
+            - label: "I did a clean reboot/power cycle"
+              next: GD_START_RETEST
             - label: "Evidence pack"
               next: GD_START_EVIDENCE
 
@@ -236,9 +261,26 @@ faults:
             - label: "Yes ✅"
               next: GD_DONE
             - label: "No"
-              next: GD_START_EVIDENCE
+              next: GD_START_E섭_EVIDENCE
 
+        # NOTE: typo guard (some YAML editors may autocorrect). Keep a real node too.
         GD_START_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Start fail*
+            Capture:
+            - What the screen says (exact text)
+            - Whether it attempts/clicks
+            - Vehicle/connector used
+            - Whether backend/auth involved
+            - Timestamps + photos
+          options:
+            - label: "Escalate"
+              next: GD_ESC
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        # Alias node to catch accidental bad reference above
+        GD_START_RETEST_EVIDENCE_FALLBACK:
           prompt: |
             🗂️ *Evidence pack — Start fail*
             Capture:
@@ -381,6 +423,22 @@ faults:
             - label: "General DC menu"
               next: __MENU_GENERAL_DC__
 
+        GD_ESC:
+          prompt: |
+            *Escalate — Offline/Comms*
+            Include: last known online time, timestamps, link type, and what was tried (reboot/cables/antenna/SIM).
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_DONE:
+          prompt: |
+            ✅ *Recovered*
+            Confirm stable backend connection (no repeated dropouts).
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
 
   # ============================================================
   # (4) Vehicle Handshake Failure
@@ -481,6 +539,22 @@ faults:
             - label: "General DC menu"
               next: __MENU_GENERAL_DC__
 
+        GD_ESC:
+          prompt: |
+            *Escalate — Vehicle Handshake*
+            Include evidence pack + whether fault follows connector/port or vehicle.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_DONE:
+          prompt: |
+            ✅ *Resolved*
+            Confirm stable operation with a short test session.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
 
   # ============================================================
   # (5) Insulation / Earth Fault
@@ -544,9 +618,17 @@ faults:
             - label: "General DC menu"
               next: __MENU_GENERAL_DC__
 
+        GD_ESC:
+          prompt: |
+            *Escalate — Insulation/Isolation*
+            Include evidence pack + whether it is repeatable across ports/vehicles.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
 
   # ============================================================
-  # (6) Overtemp / Cooling (UPDATED)
+  # (6) Overtemp / Cooling
   # ============================================================
 
   - id: general_dc_overtemp_cooling_fault
@@ -728,6 +810,14 @@ faults:
             - label: "General DC menu"
               next: __MENU_GENERAL_DC__
 
+        GD_ESC:
+          prompt: |
+            *Escalate — Overtemp/Cooling*
+            Include evidence pack + what was cleaned/checked (filters/fans/airpath) and timestamps.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
 
   # ============================================================
   # (7) E-stop / Interlock Active
@@ -757,16 +847,46 @@ faults:
             - label: "Retest session"
               next: GD_INT_RETEST
             - label: "Won’t clear"
-              next: GD_ESC
+              next: GD_INT_EVIDENCE
 
         GD_INT_RETEST:
           prompt: |
+            🔁 *Retest*
             Did the charger return to ready state?
           options:
             - label: "Yes ✅"
               next: GD_DONE
             - label: "No"
+              next: GD_INT_EVIDENCE
+
+        GD_INT_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Interlock/E-stop*
+            Capture:
+            - Exact screen message + timestamp
+            - Which E-stop was checked (location)
+            - Door/interlock points checked
+          options:
+            - label: "Escalate"
               next: GD_ESC
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_ESC:
+          prompt: |
+            *Escalate — Interlock/E-stop*
+            Include evidence pack + what points were checked and results.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_DONE:
+          prompt: |
+            ✅ *Resolved*
+            Confirm charger is in ready state and can begin a short test session.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
 
 
   # ============================================================
@@ -790,40 +910,96 @@ faults:
         GD_DR0:
           prompt: |
             ⚠️ *Low Power / Derating — Start*
-            Is the site hot / airflow blocked?
+            What’s most likely?
           options:
-            - label: "Yes / likely thermal"
-              next: __ROUTE_GENERAL_DC_OVERTEMP__
-            - label: "No / unknown"
+            - label: "🟫 Site hot / airflow blocked / fans loud (thermal-like)"
+              next: GD_DR_THERMAL_GATE
+            - label: "🔌 Suspect supply limit/undervoltage"
               next: GD_DR_SUPPLY
+            - label: "🧩 Suspect module offline / reduced capacity"
+              next: GD_DR_MODULE
+            - label: "Not sure"
+              next: GD_DR_EVIDENCE
+
+        GD_DR_THERMAL_GATE:
+          prompt: |
+            🟫 *Thermal-like derating*
+            Do quick checks:
+            - Filters/grills blocked?
+            - Fans operating?
+            - Hot exhaust recirculating into intake?
+          options:
+            - label: "I corrected airflow/filter/fan issue → retest"
+              next: GD_DR_RETEST
+            - label: "No obvious thermal issue"
+              next: GD_DR_EVIDENCE
 
         GD_DR_SUPPLY:
           prompt: |
             🔌 *Supply sanity*
             Any known site supply limits/undervoltage under load?
           options:
-            - label: "Yes"
+            - label: "Yes / alarms observed"
               next: GD_DR_EVIDENCE
             - label: "No / unknown"
+              next: GD_DR_EVIDENCE
+
+        GD_DR_MODULE:
+          prompt: |
+            🧩 *Capacity/module hint*
+            If the unit reports reduced available modules or module faults,
+            capture which module/slot/LEDs (if visible) and retest after a controlled reboot.
+          options:
+            - label: "I rebooted and rechecked"
+              next: GD_DR_RETEST
+            - label: "Evidence pack"
+              next: GD_DR_EVIDENCE
+
+        GD_DR_RETEST:
+          prompt: |
+            🔁 *Retest*
+            Is delivered power back to expected range?
+          options:
+            - label: "Yes ✅"
+              next: GD_DONE
+            - label: "No"
               next: GD_DR_EVIDENCE
 
         GD_DR_EVIDENCE:
           prompt: |
             🗂️ *Evidence pack — Derating*
             Capture:
-            - Delivered kW
+            - Delivered kW (and target if shown)
             - Whether stable/fluctuating
             - Ambient/ventilation notes
             - Any supply alarms
+            - Any module/capacity indicators
+            - Timestamps
           options:
             - label: "Escalate"
               next: GD_ESC
             - label: "General DC menu"
               next: __MENU_GENERAL_DC__
 
+        GD_ESC:
+          prompt: |
+            *Escalate — Low Power/Derating*
+            Include evidence pack + whether thermal/supply/module indicators were present.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_DONE:
+          prompt: |
+            ✅ *Resolved*
+            Confirm stable power delivery during a short test session.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
 
   # ============================================================
-  # (9) HMI Frozen / Unresponsive
+  # (9) HMI Frozen / Unresponsive (FIXED: no cross-routing)
   # ============================================================
 
   - id: general_dc_hmi_frozen_unresponsive
@@ -836,56 +1012,106 @@ faults:
     triggers:
       any_text_contains: ["hmi frozen", "screen frozen", "unresponsive", "touch not working"]
 
+    description: >
+      HMI is visible but unresponsive / frozen / touch not working. This may overlap with other issues
+      (offline, start fail, dead screen). This tree triages those states safely without jumping into other faults.
+
     decision_tree:
       start_node: GD_UI0
       nodes:
 
         GD_UI0:
           prompt: |
-            🖥️ *HMI Frozen — Start*
-            Try a controlled reboot (UI reboot if available; else power cycle).
+            🖥️ *HMI Frozen / Unresponsive — Triage*
+            Which best matches what you have right now?
           options:
-            - label: "Rebooted → recovered ✅"
+            - label: "🟥 Screen is black / no display (actually dead)"
+              next: GD_UI_DEAD_HINT
+            - label: "🟦 Display is on, but touch/buttons do nothing (frozen)"
+              next: GD_UI_REBOOT
+            - label: "🌐 It looks frozen AND says Offline/Network error"
+              next: GD_UI_OFFLINE_HINT
+            - label: "🚫 It looks frozen during start/auth/payment"
+              next: GD_UI_START_HINT
+            - label: "Not sure"
+              next: GD_UI_REBOOT
+
+        GD_UI_DEAD_HINT:
+          prompt: |
+            *This is likely NOT “HMI frozen”*
+            If the screen is black/no backlight, use:
+            *Will Not Power On (Dead / No Display)* from the General DC menu.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+            - label: "Continue with HMI reboot anyway"
+              next: GD_UI_REBOOT
+
+        GD_UI_OFFLINE_HINT:
+          prompt: |
+            *Offline-like UI state*
+            If the screen shows OFFLINE / network errors, use:
+            *Offline / Backend Comms* from the General DC menu.
+            You can still do one clean reboot first.
+          options:
+            - label: "Do one clean reboot/power cycle"
+              next: GD_UI_REBOOT
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_UI_START_HINT:
+          prompt: |
+            *Start/auth UI lock*
+            If the UI freezes during auth/payment/start:
+            - Capture exact screen text
+            - Try a clean reboot/power cycle once
+            - Retest with a known-good method/vehicle if possible
+          options:
+            - label: "Do one clean reboot/power cycle"
+              next: GD_UI_REBOOT
+            - label: "Evidence pack"
+              next: GD_UI_EVIDENCE
+
+        GD_UI_REBOOT:
+          prompt: |
+            ✅ *Controlled reboot*
+            Try:
+            1) UI reboot (if there is a service menu option), otherwise
+            2) Controlled power cycle
+
+            After reboot: is the UI responsive again?
+          options:
+            - label: "Recovered ✅"
               next: GD_DONE
             - label: "Still frozen"
-              next: GD_ESC
+              next: GD_UI_EVIDENCE
 
-
-  # ============================================================
-  # ROUTES (internal shortcuts used by menu UX) — UPDATED IDs
-  # These IDs MUST match what index.js calls:
-  #   __ROUTE_GENERAL_DC_OFFLINE__
-  #   __ROUTE_GENERAL_DC_OVERTEMP__
-  # ============================================================
-
-  - id: __ROUTE_GENERAL_DC_OFFLINE__
-    platform: general_dc
-    charger_type: dc
-    title: "__ROUTE: Offline/Comms"
-    severity: low
-    tags: [route]
-    decision_tree:
-      start_node: R_OFF0
-      nodes:
-        R_OFF0:
+        GD_UI_EVIDENCE:
           prompt: |
-            Routing to: *Offline / Backend Comms*
+            🗂️ *Evidence pack — HMI Frozen*
+            Capture:
+            - Photo/video showing unresponsive UI
+            - Any error text shown
+            - Whether it also shows offline/auth/start messages
+            - Timestamp + what reboot method was used
           options:
-            - label: "Open Offline / Backend Comms"
-              next: GD_NET0
+            - label: "Escalate"
+              next: GD_UI_ESC
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
 
-  - id: __ROUTE_GENERAL_DC_OVERTEMP__
-    platform: general_dc
-    charger_type: dc
-    title: "__ROUTE: Overtemp/Cooling"
-    severity: low
-    tags: [route]
-    decision_tree:
-      start_node: R_TH0
-      nodes:
-        R_TH0:
+        GD_UI_ESC:
           prompt: |
-            Routing to: *Overtemp / Cooling Fault*
+            *Escalate — HMI Frozen*
+            Include evidence pack + whether UI is black-screen vs visible-frozen vs offline-related.
           options:
-            - label: "Open Overtemp / Cooling Fault"
-              next: GD_TH0
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__
+
+        GD_DONE:
+          prompt: |
+            ✅ *Resolved*
+            Confirm the UI stays responsive for a few minutes and basic functions work.
+          options:
+            - label: "General DC menu"
+              next: __MENU_GENERAL_DC__

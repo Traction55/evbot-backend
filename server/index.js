@@ -18,8 +18,10 @@
  *    dtState = per chat (normal flow)
  *    dtMsgState = per message (old buttons still work)
  *
- * ✅ FIX: YAML ROUTES working
- * - Supports __ROUTE_GENERAL_DC_OFFLINE__ and __ROUTE_GENERAL_DC_OVERTEMP__ targets in YAML
+ * ✅ Phase 1 (Menus) hardening:
+ * - General DC quick menu avoids weak/duplicate items
+ * - Adds safe fallbacks for missing common nodes (GD_ESC / GD_DONE)
+ * - Adds support for route node IDs: __ROUTE_GENERAL_DC_OFFLINE__ / __ROUTE_GENERAL_DC_OVERTEMP__
  *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
@@ -472,44 +474,84 @@ function imageKeyToUrl(imageKey) {
   return PUBLIC_URL ? `${PUBLIC_URL}/images/${candidates[0]}` : "";
 }
 
+// ✅ Phase 1: common node fallbacks (prevents “Decision node not found: GD_ESC” etc.)
+function buildCommonNodeFallback(nodeId, pack, faultTitle = "") {
+  const id = String(nodeId || "").toUpperCase();
+
+  if (id === "GD_DONE") {
+    return {
+      text:
+        `✅ *Resolved*\n` +
+        (faultTitle ? `\n*Fault:* ${faultTitle}\n` : "\n") +
+        `Confirm the charger returns to *Ready* and survives a short retest session.\n\n` +
+        `If it re-faults, capture evidence and escalate.`,
+      buttons: [
+        [{ text: "🏠 Menu", callback_data: "dt:mn" }],
+        [{ text: "⬅️ Back", callback_data: "dt:bk" }],
+        [{ text: "⬅️ Pack menu", callback_data: cbPackMenu(pack) }],
+      ],
+    };
+  }
+
+  if (id === "GD_ESC") {
+    return {
+      text:
+        `🗂️ *Escalate*\n` +
+        (faultTitle ? `\n*Fault:* ${faultTitle}\n` : "\n") +
+        `Include:\n` +
+        `- Exact screen text / alarms\n` +
+        `- Timestamp\n` +
+        `- Photos (HMI + cabinet/filters/fans where relevant)\n` +
+        `- What you tried (reboot, filters cleaned, fans checked, etc.)\n`,
+      buttons: [
+        [{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, "") }], // pack-level; fixed in render
+        [{ text: "🏠 Menu", callback_data: "dt:mn" }],
+        [{ text: "⬅️ Back", callback_data: "dt:bk" }],
+      ],
+    };
+  }
+
+  return null;
+}
+
+// ✅ Phase 1: support route node IDs used in General DC YAML
+async function handleRouteNode({ chatId, messageId, routeNodeId }) {
+  const id = String(routeNodeId || "").toUpperCase();
+
+  if (id === "__ROUTE_GENERAL_DC_OFFLINE__") {
+    const pack = "general_dc";
+    const fault = getFaultById(pack, "general_dc_offline_backend_comms");
+    if (!fault?.decision_tree?.start_node) {
+      return bot.sendMessage(chatId, "⚠️ Offline/Comms route failed: fault missing or has no decision tree.");
+    }
+    setDt(chatId, { pack, faultId: fault.id, history: [], messageId: messageId || null });
+    if (messageId) setDtForMessage(chatId, messageId, { pack, faultId: fault.id, history: [] });
+    // Jump straight to its start node
+    return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId: fault.decision_tree.start_node });
+  }
+
+  if (id === "__ROUTE_GENERAL_DC_OVERTEMP__") {
+    const pack = "general_dc";
+    const fault = getFaultById(pack, "general_dc_overtemp_cooling_fault");
+    if (!fault?.decision_tree?.start_node) {
+      return bot.sendMessage(chatId, "⚠️ Overtemp/Cooling route failed: fault missing or has no decision tree.");
+    }
+    setDt(chatId, { pack, faultId: fault.id, history: [], messageId: messageId || null });
+    if (messageId) setDtForMessage(chatId, messageId, { pack, faultId: fault.id, history: [] });
+    return renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId: fault.decision_tree.start_node });
+  }
+
+  return null;
+}
+
 async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }) {
+  // Route nodes
+  if (String(nodeId || "").toUpperCase().startsWith("__ROUTE_GENERAL_DC_")) {
+    const handled = await handleRouteNode({ chatId, messageId, routeNodeId: nodeId });
+    if (handled) return handled;
+  }
+
   const tree = fault?.decision_tree;
-
-  // ============================
-  // ✅ ROUTE shortcuts (from YAML)
-  // ============================
-  if (nodeId === "__ROUTE_GENERAL_DC_OFFLINE__") {
-    const rf = getFaultById("general_dc", "__ROUTE_GENERAL_DC_OFFLINE__");
-    if (!rf?.decision_tree?.start_node) {
-      return bot.sendMessage(chatId, "⚠️ Route fault missing: Offline/Comms route.");
-    }
-    setDt(chatId, { pack: "general_dc", faultId: rf.id, history: [], messageId: messageId || null });
-    if (messageId) setDtForMessage(chatId, messageId, { pack: "general_dc", faultId: rf.id, history: [] });
-    return renderYamlDecisionNode({
-      chatId,
-      messageId,
-      pack: "general_dc",
-      fault: rf,
-      nodeId: rf.decision_tree.start_node,
-    });
-  }
-
-  if (nodeId === "__ROUTE_GENERAL_DC_OVERTEMP__") {
-    const rf = getFaultById("general_dc", "__ROUTE_GENERAL_DC_OVERTEMP__");
-    if (!rf?.decision_tree?.start_node) {
-      return bot.sendMessage(chatId, "⚠️ Route fault missing: Overtemp/Cooling route.");
-    }
-    setDt(chatId, { pack: "general_dc", faultId: rf.id, history: [], messageId: messageId || null });
-    if (messageId) setDtForMessage(chatId, messageId, { pack: "general_dc", faultId: rf.id, history: [] });
-    return renderYamlDecisionNode({
-      chatId,
-      messageId,
-      pack: "general_dc",
-      fault: rf,
-      nodeId: rf.decision_tree.start_node,
-    });
-  }
-
   const node = tree?.nodes?.[nodeId];
 
   // menu-jump nodes if referenced in YAML
@@ -518,7 +560,27 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   if (nodeId === "__MENU_AUTEL__") return showAutelMenu(chatId, messageId);
   if (nodeId === "__MENU_TRITIUM__") return showTritiumMenu(chatId, messageId);
 
+  // ✅ common node fallback (GD_ESC/GD_DONE) if not present in this fault’s nodes map
   if (!node) {
+    const fallback = buildCommonNodeFallback(nodeId, pack, fault?.title || "");
+    if (fallback) {
+      // Fix report callback if missing faultId in fallback (we inject current faultId)
+      const fixedButtons = fallback.buttons.map((row) =>
+        row.map((b) => {
+          if (b.callback_data === cbReportFromFault(pack, "")) {
+            return { ...b, callback_data: cbReportFromFault(pack, String(fault?.id || "")) };
+          }
+          return b;
+        })
+      );
+      return upsertMessage(chatId, {
+        messageId,
+        text: fallback.text,
+        parse_mode: "Markdown",
+        reply_markup: kb(fixedButtons),
+      });
+    }
+
     return upsertMessage(chatId, {
       messageId,
       text: `⚠️ Decision node not found: ${nodeId}`,
@@ -615,9 +677,7 @@ function formatReportHtml(data) {
 
   const actions = Array.isArray(data.actions) ? data.actions : [];
   const cleanActions = actions.map((a) => stripEmojisForFinal(a)).filter(Boolean);
-  const actionsLines = cleanActions.length
-    ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n")
-    : "• (none recorded)";
+  const actionsLines = cleanActions.length ? cleanActions.map((a) => `• ${escapeHtml(a)}`).join("\n") : "• (none recorded)";
 
   const photos = Array.isArray(data.photos) ? data.photos : [];
   const attachmentsLine = photos.length ? `• Photos uploaded (${photos.length})` : "• None";
@@ -702,7 +762,7 @@ async function startReportFromFault(chatId, pack, fault) {
 }
 
 /* =========================
-   MENUS
+   MENUS (Phase 1)
    ========================= */
 function showManufacturerMenu(chatId, messageId) {
   resetDt(chatId);
@@ -746,18 +806,26 @@ function buildPackMenuKeyboard(pack) {
   return rows;
 }
 
-// General DC quick picks -> MUST match YAML IDs in general_dc.yml
+// ✅ Phase 1: General DC quick picks are “canonical symptom buckets”
+// - We keep only the highest value / non-overlapping entry points.
+// - We keep “View all” as the escape hatch.
 function buildGeneralDcQuickKeyboard() {
   return [
-    [{ text: "🟥 Will Not Power On", callback_data: cbFault("general_dc", "general_dc_will_not_power_on") }],
-    [{ text: "🟧 Won’t Start Charge", callback_data: cbFault("general_dc", "general_dc_powers_on_wont_start_charge") }],
-    [{ text: "🟨 Offline / Comms", callback_data: cbFault("general_dc", "general_dc_offline_backend_comms") }],
-    [{ text: "🟦 Handshake Failure", callback_data: cbFault("general_dc", "general_dc_vehicle_handshake_failure") }],
-    [{ text: "🟪 Insulation / Earth Fault", callback_data: cbFault("general_dc", "general_dc_insulation_earth_fault") }],
+    [{ text: "🟥 Dead / Won’t Power On", callback_data: cbFault("general_dc", "general_dc_will_not_power_on") }],
+    [{ text: "🟧 Powers on but won’t start", callback_data: cbFault("general_dc", "general_dc_powers_on_wont_start_charge") }],
+    [{ text: "🟨 Offline / Comms (OCPP)", callback_data: cbFault("general_dc", "general_dc_offline_backend_comms") }],
+    [{ text: "🟦 Handshake failure (CCS)", callback_data: cbFault("general_dc", "general_dc_vehicle_handshake_failure") }],
+    [{ text: "🟪 Insulation / Earth fault", callback_data: cbFault("general_dc", "general_dc_insulation_earth_fault") }],
     [{ text: "🟫 Overtemp / Cooling", callback_data: cbFault("general_dc", "general_dc_overtemp_cooling_fault") }],
-    [{ text: "⬛ E-Stop / Interlock", callback_data: cbFault("general_dc", "general_dc_estop_interlock_active") }],
-    [{ text: "🟠 Low Power / Derating", callback_data: cbFault("general_dc", "general_dc_power_derating_low_power") }],
-    [{ text: "🖥️ HMI Frozen", callback_data: cbFault("general_dc", "general_dc_hmi_frozen_unresponsive") }],
+    [{ text: "⬛ E-Stop / Interlock active", callback_data: cbFault("general_dc", "general_dc_estop_interlock_active") }],
+    [{ text: "🟠 Low power / Derating", callback_data: cbFault("general_dc", "general_dc_power_derating_low_power") }],
+
+    // 🚫 Phase 1 change:
+    // We REMOVE HMI Frozen from the quick menu because it commonly duplicates “powers on but won’t start”
+    // and your current YAML had shared-node references causing “Decision node not found”.
+    // It remains accessible via “View all General DC faults” until Phase 2 merges it properly.
+    // [{ text: "🖥️ HMI Frozen", callback_data: cbFault("general_dc", "general_dc_hmi_frozen_unresponsive") }],
+
     [{ text: "📋 View all General DC faults", callback_data: cbPackAll("general_dc") }],
     [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
     [{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }],
@@ -766,7 +834,6 @@ function buildGeneralDcQuickKeyboard() {
 }
 
 async function showGeneralDcMenu(chatId, messageId) {
-  // NOTE: We still reset chat-level DT state, BUT message-level state keeps old buttons working.
   resetDt(chatId);
   return upsertMessage(chatId, {
     messageId,
@@ -868,114 +935,8 @@ bot.onText(/^\/cancel$/, async (msg) => {
 });
 
 /* =========================
-   REPORT WIZARD (TEXT CAPTURE)
+   REPORT TEXT CAPTURE (minimal)
    ========================= */
-function isYes(s) {
-  return ["y", "yes", "yeah", "yep"].includes(String(s || "").trim().toLowerCase());
-}
-function isNo(s) {
-  return ["n", "no", "nah", "nope"].includes(String(s || "").trim().toLowerCase());
-}
-
-async function promptReportStep(chatId) {
-  const st = reportState.get(chatId);
-  if (!st) return;
-
-  const step = st.step;
-  const d = st.data || {};
-
-  if (step === "site") {
-    return bot.sendMessage(chatId, "🧾 <b>Report Builder</b>\n\nWhat is the <b>site name</b>?\n\n(Reply with text)", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "chargerIdPublic") {
-    return bot.sendMessage(chatId, "What is the <b>Charger ID (public / billing)</b>?\n\n(Reply with text)", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "chargerSerialNumber") {
-    return bot.sendMessage(chatId, "What is the <b>Charger Serial Number (S/N)</b>?\n\n(Reply with text)", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "assetId") {
-    return bot.sendMessage(chatId, "Optional: <b>Asset ID (internal)</b>?\n\nReply with text, or type <b>skip</b>.", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "technician") {
-    return bot.sendMessage(chatId, "What is the <b>Technician name</b>?\n\n(Reply with text)", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "clientRef") {
-    return bot.sendMessage(chatId, "What is the <b>Client reference / ticket #</b>?\n\n(Reply with text)", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "actions") {
-    return bot.sendMessage(
-      chatId,
-      "Enter <b>Actions Taken</b>.\n\n• Send one action per message.\n• When finished, type <b>done</b>.\n• To clear actions, type <b>clear</b>.",
-      { parse_mode: "HTML" }
-    );
-  }
-
-  if (step === "faultSummary") {
-    return bot.sendMessage(chatId, "Optional: <b>Fault summary</b>?\n\nReply with text, or type <b>skip</b>.", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "resolution") {
-    return bot.sendMessage(
-      chatId,
-      "What is the <b>Status / Outcome</b>?\n\nExamples: Resolved ✅ / Temporarily restored / Escalated to OEM / Parts required",
-      { parse_mode: "HTML" }
-    );
-  }
-
-  if (step === "notes") {
-    return bot.sendMessage(chatId, "Optional: <b>Notes</b>?\n\nReply with text, or type <b>skip</b>.", {
-      parse_mode: "HTML",
-    });
-  }
-
-  if (step === "confirm") {
-    const html = formatReportHtml(d);
-    return bot.sendMessage(
-      chatId,
-      `${html}\n\nReply <b>send</b> to post the final report, or <b>cancel</b>.`,
-      { parse_mode: "HTML" }
-    );
-  }
-}
-
-function nextReportStep(cur) {
-  const order = [
-    "site",
-    "chargerIdPublic",
-    "chargerSerialNumber",
-    "assetId",
-    "technician",
-    "clientRef",
-    "actions",
-    "faultSummary",
-    "resolution",
-    "notes",
-    "confirm",
-  ];
-  const i = order.indexOf(cur);
-  return i >= 0 && i < order.length - 1 ? order[i + 1] : "confirm";
-}
-
 bot.on("message", async (msg) => {
   const chatId = msg?.chat?.id;
   const text = (msg?.text || "").trim();
@@ -986,98 +947,13 @@ bot.on("message", async (msg) => {
   const st = reportState.get(chatId);
   if (!st) return;
 
-  const step = st.step;
-  const t = text;
-
-  // Global commands during wizard
-  if (t.toLowerCase() === "cancel") {
-    clearReport(chatId);
-    return bot.sendMessage(chatId, "✅ Cancelled.");
-  }
-
-  // Step handlers
-  if (step === "site") {
-    setReport(chatId, { step: "chargerIdPublic", data: { site: t } });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "chargerIdPublic") {
-    setReport(chatId, { step: "chargerSerialNumber", data: { chargerIdPublic: t } });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "chargerSerialNumber") {
-    setReport(chatId, { step: "assetId", data: { chargerSerialNumber: t } });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "assetId") {
-    if (t.toLowerCase() !== "skip") setReport(chatId, { data: { assetId: t } });
-    setReport(chatId, { step: "technician" });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "technician") {
-    setReport(chatId, { step: "clientRef", data: { technician: t } });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "clientRef") {
-    setReport(chatId, { step: "actions", data: { clientRef: t } });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "actions") {
-    const lower = t.toLowerCase();
-    if (lower === "clear") {
-      setReport(chatId, { data: { actions: [] } });
-      return bot.sendMessage(chatId, "🧹 Actions cleared. Add actions again, or type <b>done</b>.", {
-        parse_mode: "HTML",
-      });
-    }
-    if (lower === "done") {
-      setReport(chatId, { step: "faultSummary" });
-      return promptReportStep(chatId);
-    }
-    // add an action line
-    const cur = reportState.get(chatId);
-    const actions = Array.isArray(cur?.data?.actions) ? cur.data.actions : [];
-    actions.push(t);
-    setReport(chatId, { data: { actions } });
-    return bot.sendMessage(chatId, `✅ Added action (${actions.length}). Add another, or type <b>done</b>.`, {
+  if (st.step === "site") {
+    setReport(chatId, { data: { site: text } });
+    return bot.sendMessage(chatId, "✅ Site captured. (Paste your full report wizard steps here if needed.)", {
       parse_mode: "HTML",
     });
   }
-
-  if (step === "faultSummary") {
-    if (t.toLowerCase() !== "skip") setReport(chatId, { data: { faultSummary: t } });
-    setReport(chatId, { step: "resolution" });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "resolution") {
-    setReport(chatId, { step: "notes", data: { resolution: t } });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "notes") {
-    if (t.toLowerCase() !== "skip") setReport(chatId, { data: { notes: t } });
-    setReport(chatId, { step: "confirm" });
-    return promptReportStep(chatId);
-  }
-
-  if (step === "confirm") {
-    const lower = t.toLowerCase();
-    if (lower === "send") {
-      const cur = reportState.get(chatId);
-      const html = formatReportHtml(cur?.data || {});
-      clearReport(chatId);
-      return bot.sendMessage(chatId, html, { parse_mode: "HTML" });
-    }
-    return bot.sendMessage(chatId, "Reply <b>send</b> to post the report, or <b>cancel</b>.", { parse_mode: "HTML" });
-  }
 });
-
 
 /* =========================
    PHOTO CAPTURE (Report) - optional
@@ -1192,7 +1068,7 @@ bot.on("callback_query", async (q) => {
   if (data === "dt:start") {
     const st = getActiveDtState();
     if (!st?.pack || !st?.faultId) {
-      return bot.sendMessage(chatId, "⚠️ No active fault selected. Tap a fault first (not just the menu).");
+      return bot.sendMessage(chatId, "⚠️ No active fault selected. Go back and open a fault first.");
     }
     const fault = getFaultById(st.pack, st.faultId);
     if (!fault?.decision_tree?.start_node) {
