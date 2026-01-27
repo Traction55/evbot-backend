@@ -868,8 +868,114 @@ bot.onText(/^\/cancel$/, async (msg) => {
 });
 
 /* =========================
-   REPORT TEXT CAPTURE (minimal)
+   REPORT WIZARD (TEXT CAPTURE)
    ========================= */
+function isYes(s) {
+  return ["y", "yes", "yeah", "yep"].includes(String(s || "").trim().toLowerCase());
+}
+function isNo(s) {
+  return ["n", "no", "nah", "nope"].includes(String(s || "").trim().toLowerCase());
+}
+
+async function promptReportStep(chatId) {
+  const st = reportState.get(chatId);
+  if (!st) return;
+
+  const step = st.step;
+  const d = st.data || {};
+
+  if (step === "site") {
+    return bot.sendMessage(chatId, "🧾 <b>Report Builder</b>\n\nWhat is the <b>site name</b>?\n\n(Reply with text)", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "chargerIdPublic") {
+    return bot.sendMessage(chatId, "What is the <b>Charger ID (public / billing)</b>?\n\n(Reply with text)", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "chargerSerialNumber") {
+    return bot.sendMessage(chatId, "What is the <b>Charger Serial Number (S/N)</b>?\n\n(Reply with text)", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "assetId") {
+    return bot.sendMessage(chatId, "Optional: <b>Asset ID (internal)</b>?\n\nReply with text, or type <b>skip</b>.", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "technician") {
+    return bot.sendMessage(chatId, "What is the <b>Technician name</b>?\n\n(Reply with text)", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "clientRef") {
+    return bot.sendMessage(chatId, "What is the <b>Client reference / ticket #</b>?\n\n(Reply with text)", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "actions") {
+    return bot.sendMessage(
+      chatId,
+      "Enter <b>Actions Taken</b>.\n\n• Send one action per message.\n• When finished, type <b>done</b>.\n• To clear actions, type <b>clear</b>.",
+      { parse_mode: "HTML" }
+    );
+  }
+
+  if (step === "faultSummary") {
+    return bot.sendMessage(chatId, "Optional: <b>Fault summary</b>?\n\nReply with text, or type <b>skip</b>.", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "resolution") {
+    return bot.sendMessage(
+      chatId,
+      "What is the <b>Status / Outcome</b>?\n\nExamples: Resolved ✅ / Temporarily restored / Escalated to OEM / Parts required",
+      { parse_mode: "HTML" }
+    );
+  }
+
+  if (step === "notes") {
+    return bot.sendMessage(chatId, "Optional: <b>Notes</b>?\n\nReply with text, or type <b>skip</b>.", {
+      parse_mode: "HTML",
+    });
+  }
+
+  if (step === "confirm") {
+    const html = formatReportHtml(d);
+    return bot.sendMessage(
+      chatId,
+      `${html}\n\nReply <b>send</b> to post the final report, or <b>cancel</b>.`,
+      { parse_mode: "HTML" }
+    );
+  }
+}
+
+function nextReportStep(cur) {
+  const order = [
+    "site",
+    "chargerIdPublic",
+    "chargerSerialNumber",
+    "assetId",
+    "technician",
+    "clientRef",
+    "actions",
+    "faultSummary",
+    "resolution",
+    "notes",
+    "confirm",
+  ];
+  const i = order.indexOf(cur);
+  return i >= 0 && i < order.length - 1 ? order[i + 1] : "confirm";
+}
+
 bot.on("message", async (msg) => {
   const chatId = msg?.chat?.id;
   const text = (msg?.text || "").trim();
@@ -880,13 +986,98 @@ bot.on("message", async (msg) => {
   const st = reportState.get(chatId);
   if (!st) return;
 
-  if (st.step === "site") {
-    setReport(chatId, { data: { site: text } });
-    return bot.sendMessage(chatId, "✅ Site captured. (Paste your full report wizard steps here if needed.)", {
+  const step = st.step;
+  const t = text;
+
+  // Global commands during wizard
+  if (t.toLowerCase() === "cancel") {
+    clearReport(chatId);
+    return bot.sendMessage(chatId, "✅ Cancelled.");
+  }
+
+  // Step handlers
+  if (step === "site") {
+    setReport(chatId, { step: "chargerIdPublic", data: { site: t } });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "chargerIdPublic") {
+    setReport(chatId, { step: "chargerSerialNumber", data: { chargerIdPublic: t } });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "chargerSerialNumber") {
+    setReport(chatId, { step: "assetId", data: { chargerSerialNumber: t } });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "assetId") {
+    if (t.toLowerCase() !== "skip") setReport(chatId, { data: { assetId: t } });
+    setReport(chatId, { step: "technician" });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "technician") {
+    setReport(chatId, { step: "clientRef", data: { technician: t } });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "clientRef") {
+    setReport(chatId, { step: "actions", data: { clientRef: t } });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "actions") {
+    const lower = t.toLowerCase();
+    if (lower === "clear") {
+      setReport(chatId, { data: { actions: [] } });
+      return bot.sendMessage(chatId, "🧹 Actions cleared. Add actions again, or type <b>done</b>.", {
+        parse_mode: "HTML",
+      });
+    }
+    if (lower === "done") {
+      setReport(chatId, { step: "faultSummary" });
+      return promptReportStep(chatId);
+    }
+    // add an action line
+    const cur = reportState.get(chatId);
+    const actions = Array.isArray(cur?.data?.actions) ? cur.data.actions : [];
+    actions.push(t);
+    setReport(chatId, { data: { actions } });
+    return bot.sendMessage(chatId, `✅ Added action (${actions.length}). Add another, or type <b>done</b>.`, {
       parse_mode: "HTML",
     });
   }
+
+  if (step === "faultSummary") {
+    if (t.toLowerCase() !== "skip") setReport(chatId, { data: { faultSummary: t } });
+    setReport(chatId, { step: "resolution" });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "resolution") {
+    setReport(chatId, { step: "notes", data: { resolution: t } });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "notes") {
+    if (t.toLowerCase() !== "skip") setReport(chatId, { data: { notes: t } });
+    setReport(chatId, { step: "confirm" });
+    return promptReportStep(chatId);
+  }
+
+  if (step === "confirm") {
+    const lower = t.toLowerCase();
+    if (lower === "send") {
+      const cur = reportState.get(chatId);
+      const html = formatReportHtml(cur?.data || {});
+      clearReport(chatId);
+      return bot.sendMessage(chatId, html, { parse_mode: "HTML" });
+    }
+    return bot.sendMessage(chatId, "Reply <b>send</b> to post the report, or <b>cancel</b>.", { parse_mode: "HTML" });
+  }
 });
+
 
 /* =========================
    PHOTO CAPTURE (Report) - optional
