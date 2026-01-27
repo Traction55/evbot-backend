@@ -9,11 +9,6 @@ faults:
 
   # ============================================================
   # (1) GOLD STANDARD CLUSTER: Autel Power-Stage / HV Start Inhibit
-  # Canonical flow for:
-  # - Precharge / DC bus not building
-  # - DC output contactor cannot close / verify
-  # - HV enable inhibited by interlocks / insulation
-  # - "Charging won't start" when the root cause is internal power-stage
   # ============================================================
 
   - id: autel_power_stage_cluster
@@ -27,657 +22,148 @@ faults:
       - "Power-stage fault"
       - "HV start inhibited"
       - "precharge fault"
-      - "pre-charge fault"
-      - "dc bus fault"
       - "dc bus not ready"
-      - "dc bus undervoltage"
-      - "dc bus overvoltage"
       - "dc contactor failed"
-      - "output contactor fault"
-      - "failed to close contactor"
       - "hv enable fault"
       - "start failed"
-      - "internal power fault"
 
     triggers:
       any_text_contains:
-        - "power-stage"
-        - "power stage"
-        - "hv start"
-        - "hv enable"
-        - "start inhibited"
-        - "start failed"
         - "precharge"
-        - "pre-charge"
         - "dc bus"
-        - "bus undervoltage"
-        - "bus overvoltage"
-        - "output contactor"
-        - "dc contactor"
-        - "failed to close"
-        - "contactor failed"
+        - "hv enable"
+        - "start failed"
         - "contactor fault"
-        - "welded contactor"
         - "isolation"
-        - "insulation"
         - "imd"
         - "hvil"
-        - "interlock open"
-        - "door interlock"
-        - "e-stop"
-        - "estop"
+        - "interlock"
 
     description: >
-      The charger is preventing HV start or cannot complete the HV start sequence (enable → precharge → DC bus build →
-      contactor verification). This is commonly caused by interlock/insulation inhibits, unstable control power, supply
-      quality issues that disrupt precharge, failed/welded contactors, or a DC-bus condition that does not meet checks.
-
-    safety_notes:
-      - LOTO before opening cabinets; wait minimum 5 minutes for DC bus discharge
-      - Treat insulation/isolation alarms as high risk; do not repeatedly attempt sessions
-      - Do not bypass HVIL/interlocks; do not repeatedly reset trips
-
-    tools_required:
-      - Multimeter (true RMS preferred)
-      - Insulated hand tools
-      - Torch / inspection light
-      - IR thermometer (optional)
+      The charger is preventing HV start or cannot complete the HV start sequence
+      (enable → precharge → DC bus build → contactor verification).
 
     decision_tree:
       start_node: PS0
       nodes:
-
         PS0:
           prompt: |
             *Autel — Power-Stage / HV Start Inhibit*
             Start symptom-first. What are you seeing?
           options:
-            - label: "🚫 Won’t start a session / start fails immediately"
-              next: PS_PATTERN_START_FAIL
-            - label: "⚠️ Starts then stops quickly / contactor clicks then faults"
-              next: PS_PATTERN_CLICKS_FAULTS
-            - label: "🟪 Insulation / isolation / IMD alarm present"
-              next: PS_ISO_GATE
-            - label: "⬛ E-Stop / Interlock / HVIL indicated"
-              next: PS_INTERLOCK_GATE
-            - label: "🔌 Supply unstable / undervoltage / phase issues suspected"
-              next: PS_SUPPLY_GATE
-            - label: "🔎 I have a specific code/message (precharge / DC bus / contactor)"
-              next: PS_CODE_HINTS
-
-        PS_PATTERN_START_FAIL:
-          prompt: |
-            *Pattern check — Start fails*
-            Does the charger show any explicit block reason (interlock, insulation, DC bus, contactor)?
-          options:
-            - label: "Yes — insulation/isolation"
-              next: PS_ISO_GATE
-            - label: "Yes — interlock/HVIL/E-stop"
-              next: PS_INTERLOCK_GATE
-            - label: "Yes — DC bus / precharge / contactor"
-              next: PS_DC_BUS_PATH
-            - label: "No obvious reason shown"
+            - label: "🚫 Won’t start a session"
               next: PS_SAFE_REBOOT
-
-        PS_PATTERN_CLICKS_FAULTS:
-          prompt: |
-            *Pattern check — Clicks then faults*
-            That’s commonly precharge/DC bus build or contactor verification. Proceed through safe-first recovery.
-          options:
-            - label: "Continue ➡️"
+            - label: "⚠️ Clicks then faults"
               next: PS_SAFE_REBOOT
-
-        PS_CODE_HINTS:
-          prompt: |
-            *Quick routing (choose closest)*
-          options:
-            - label: "🟥 DC contactor failed / failed to close / verify"
-              next: PS_CONTACTOR_PATH
-            - label: "🟦 Precharge fault / DC bus not ready / DC bus undervoltage"
-              next: PS_DC_BUS_PATH
-            - label: "🟧 DC bus overvoltage"
-              next: PS_DC_BUS_OV_PATH
-            - label: "🟪 Insulation / isolation / IMD"
-              next: PS_ISO_GATE
-            - label: "⬛ Interlock / HVIL / E-stop"
-              next: PS_INTERLOCK_GATE
-            - label: "❓ Not sure"
-              next: PS_SAFE_REBOOT
+            - label: "🟪 Insulation / IMD alarm"
+              next: PS_ESC
+            - label: "⬛ Interlock / E-stop"
+              next: PS_ESC
 
         PS_SAFE_REBOOT:
           prompt: |
-            ✅ *Safe recovery first*
-            - Confirm no smoke/heat/water ingress
-            - Perform a controlled reboot / power cycle
-            - Re-check for the *first* fault that returns (that’s often the real root)
+            *Safe recovery*
+            Perform a controlled reboot and observe which fault returns first.
           options:
-            - label: "Recovered ✅"
+            - label: "Recovered"
               next: PS_DONE_RESOLVED
             - label: "Still failing"
-              next: PS_VISUAL
-
-        PS_VISUAL:
-          prompt: |
-            👀 *Visual checks (no invasive work)*
-            - Burnt smell / discoloration / melted insulation?
-            - Water ingress / wet marks?
-            - Loose external connectors / obvious harness strain?
-          options:
-            - label: "🔥 Unsafe condition found"
-              next: PS_ESC_UNSAFE
-            - label: "Looks OK"
-              next: PS_SUPPLY_GATE
-
-        PS_SUPPLY_GATE:
-          prompt: |
-            ⚡ *Supply sanity check*
-            Is there any supply alarm (undervoltage/phase loss) or known site instability?
-          options:
-            - label: "Yes"
-              next: PS_SUPPLY_ACTIONS
-            - label: "No / unknown"
-              next: PS_INTERLOCK_GATE
-
-        PS_SUPPLY_ACTIONS:
-          prompt: |
-            *Supply actions (safe-first)*
-            - Check upstream breaker/isolator status
-            - If authorised: confirm L-L voltages are present and not sagging badly at enable
-            - If it’s a site issue: stabilise supply before deeper charger work
-          options:
-            - label: "Supply corrected → retry"
-              next: PS_SAFE_REBOOT
-            - label: "Supply seems OK → continue"
-              next: PS_INTERLOCK_GATE
-            - label: "Can’t verify → escalate"
               next: PS_ESC
 
-        PS_INTERLOCK_GATE:
+        PS_DONE_RESOLVED:
           prompt: |
-            ⬛ *Interlock / HVIL gate*
-            If any interlock is open, HV start will be inhibited.
-            Clear interlocks first before chasing power-stage parts.
-          image: autel/interlock_chain_points
-          options:
-            - label: "Interlock cleared → retry"
-              next: PS_SAFE_REBOOT
-            - label: "Interlock won’t clear"
-              next: PS_ESC
-
-        PS_ISO_GATE:
-          prompt: |
-            🟪 *Isolation / IMD gate (high risk)*
-            Treat as safety critical:
-            - Avoid repeated start attempts
-            - Inspect for moisture/contamination at the connector and cabinet
-          options:
-            - label: "Moisture/contamination suspected"
-              next: PS_ISO_ACTIONS
-            - label: "No moisture obvious"
-              next: PS_ISO_ACTIONS
-
-        PS_ISO_ACTIONS:
-          prompt: |
-            *Isolation actions*
-            - Document the isolation/IMD message + timestamp
-            - Inspect connector face for water/debris/burn marks
-            - If repeatable across EVs/ports: tag out affected port and escalate
-          options:
-            - label: "Escalate"
-              next: PS_ESC
-            - label: "Back to Autel menu"
-              next: __MENU_AUTEL__
-
-        PS_DC_BUS_PATH:
-          prompt: |
-            🟦 *Precharge / DC bus path*
-            Common causes:
-            - Supply sag during enable
-            - Interlock inhibit (precharge never allowed)
-            - DC contactor/feedback causing abort
-            Proceed: supply → interlock → contactor verification → escalate.
-          options:
-            - label: "Continue ➡️"
-              next: PS_CONTACTOR_PATH
-
-        PS_DC_BUS_OV_PATH:
-          prompt: |
-            🟧 *DC bus overvoltage*
-            Do NOT repeatedly retry. Capture evidence and escalate.
-          options:
-            - label: "Escalate"
-              next: PS_ESC
-            - label: "Back to Autel menu"
-              next: __MENU_AUTEL__
-
-        PS_CONTACTOR_PATH:
-          prompt: |
-            🟥 *Contactor verification path*
-            If you also have a "DC contactor" alarm, use the DC Contactor fault entry as the *label*,
-            but this cluster remains the canonical troubleshooting path.
-          options:
-            - label: "Continue ➡️"
-              next: PS_LOGS
-
-        PS_LOGS:
-          prompt: |
-            🗂️ *Evidence pack (for fast escalation)*
-            Capture:
-            - Exact message/code + timestamp
-            - Whether it clicks (precharge/contactor attempt) or not
-            - Any supply alarms
-            - Interlock status
-          options:
-            - label: "Escalate"
-              next: PS_ESC
-            - label: "Back to Autel menu"
-              next: __MENU_AUTEL__
-
-        PS_ESC_UNSAFE:
-          prompt: |
-            *⚠️ Escalate immediately — unsafe condition*
-            Do NOT re-energise.
-            Provide photos + what you observed (smell/heat/water ingress).
+            *Resolved*
+            Run a short test session and confirm stability.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
         PS_ESC:
           prompt: |
-            *Escalate — Autel Power-Stage / HV Start Inhibit*
-            Include:
-            - Exact code/text + timestamps
-            - State: start fails vs clicks then faults
-            - Supply notes (any undervoltage/phase issues)
-            - Interlock/IMD status
-            - Actions taken (reboot/power cycle)
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-        PS_DONE_RESOLVED:
-          prompt: |
-            ✅ *Resolved*
-            HV start restored. Run a short test session and confirm no recurrence.
+            *Escalate — Power-Stage / HV Start Inhibit*
+            Include fault text, timestamps, and observed behaviour.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
 
 
   # ============================================================
-  # (2) ROUTER: AC Contactor Fault (ID stable; routes into cluster)
-  # ============================================================
-
-  - id: autel_ac_contactor_fault
-    platform: autel
-    charger_type: dc
-    title: "AC Contactor Fault (Autel DC)"
-    aliases:
-      - "AC Contactor Fault"
-      - "AC contactor error"
-      - "input contactor fault"
-      - "main contactor fault"
-      - "contactor open feedback"
-      - "contactor feedback error"
-
-    triggers:
-      any_text_contains:
-        - "ac contactor"
-        - "contactor feedback"
-        - "input contactor"
-        - "main contactor"
-
-    severity: high
-    tags: [power, input, contactor, interlock, feedback, three_phase]
-
-    description: >
-      Routed fault: AC input contactor issues are diagnosed through the Power-Stage / HV Start Inhibit cluster.
-      (This keeps the ID stable for deep-links while consolidating troubleshooting.)
-
-    decision_tree:
-      start_node: RAC0
-      nodes:
-        RAC0:
-          prompt: |
-            *AC Contactor Fault — Routed to Power-Stage Cluster*
-            This fault is now handled by the *Power-Stage / HV Start Inhibit* flow (canonical).
-
-            Why:
-            - AC contactor issues are usually supply/PSU/interlock/enable-chain problems
-            - Those checks are shared with precharge/DC bus/contactors
-          options:
-            - label: "➡️ Open Power-Stage / HV Start Inhibit flow"
-              next: RAC1
-            - label: "🏠 Back to Autel menu"
-              next: __MENU_AUTEL__
-
-        RAC1:
-          prompt: |
-            Select the *Power-Stage / HV Start Inhibit* fault from the Autel menu and follow that flow.
-            (This keeps everything consistent across related faults.)
-          options:
-            - label: "🏠 Autel menu"
-              next: __MENU_AUTEL__
-
-
-  # ============================================================
-  # (3) ROUTER: DC Contactor Fault (ID stable; routes into cluster)
-  # ============================================================
-
-  - id: autel_dc_contactor_fault
-    platform: autel
-    charger_type: dc
-    title: "DC Contactor Fault / Failed to Close (Autel DC)"
-    severity: high
-    tags: [dc, contactor, output, hv, safety]
-
-    description: >
-      Routed fault: DC output contactor verification failures are diagnosed through the Power-Stage / HV Start Inhibit cluster.
-      (This keeps the ID stable for deep-links while consolidating troubleshooting.)
-
-    decision_tree:
-      start_node: RDC0
-      nodes:
-        RDC0:
-          prompt: |
-            *DC Contactor Fault — Routed to Power-Stage Cluster*
-            This is now handled by the *Power-Stage / HV Start Inhibit* flow (canonical).
-
-            Why:
-            - DC contactor faults overlap precharge/DC bus enable + interlock/IMD gates
-            - One gold-standard flow reduces duplicated procedures and tech confusion
-          options:
-            - label: "➡️ Open Power-Stage / HV Start Inhibit flow"
-              next: RDC1
-            - label: "🏠 Back to Autel menu"
-              next: __MENU_AUTEL__
-
-        RDC1:
-          prompt: |
-            Select the *Power-Stage / HV Start Inhibit* fault from the Autel menu and follow that flow.
-          options:
-            - label: "🏠 Autel menu"
-              next: __MENU_AUTEL__
-
-
-  # ============================================================
-  # (4) Backend / OCPP Communication Fault
-  # ============================================================
-
-  - id: autel_backend_ocpp_comms_fault
-    platform: autel
-    charger_type: dc
-    title: "Backend / OCPP Communication Fault (Autel DC)"
-    severity: high
-    tags: [ocpp, backend, comms, modem, sim, network]
-
-    description: >
-      The charger is offline to the backend (OCPP). Start with a reboot/power cycle to recover modem registration.
-      If basic recovery fails, investigate SIM/APN, carrier/signal issues, DNS/time sync, and backend firewall/whitelisting.
-
-    decision_tree:
-      start_node: C0
-      nodes:
-        C0:
-          prompt: |
-            *Backend / OCPP offline*
-            Confirm offline state and proceed with recovery steps.
-          options:
-            - label: "Continue"
-              next: C1
-
-        C1:
-          prompt: |
-            *Reboot charger*
-            Reboot and allow time for modem registration and OCPP handshake.
-          options:
-            - label: "Online"
-              next: MONITOR
-            - label: "Still offline"
-              next: C2
-
-        C2:
-          prompt: |
-            *Next step*
-            If reboot did not restore comms, either escalate or perform advanced SIM/network checks.
-          options:
-            - label: "📈 Escalate"
-              next: ESCALATE_AUTEL
-            - label: "🧠 Deep dive — advanced checks"
-              next: ADVANCED_SIM_NETWORK
-
-        ADVANCED_SIM_NETWORK:
-          prompt: |
-            🧠 *Deep Dive — SIM / Network / OCPP*
-            Check:
-            • SIM provisioning / packet data
-            • APN
-            • Carrier outage / poor signal
-            • DNS/time sync affecting TLS
-          options:
-            - label: "Issue fixed → reboot"
-              next: C1
-            - label: "No issue found"
-              next: ESCALATE_AUTEL
-
-        ESCALATE_AUTEL:
-          prompt: |
-            *Escalate backend / OCPP*
-            Include: last known online time, signal strength (if available),
-            SIM/APN checks, and any comms errors/log timestamps.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Confirm stable backend connection and monitor for dropouts.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  # ============================================================
-  # (5) Overtemperature / Cooling Fault
-  # ============================================================
-
-  - id: autel_overtemp_cooling_fault
-    platform: autel
-    charger_type: dc
-    title: "Overtemperature / Cooling Fault (Autel DC)"
-    severity: high
-    tags: [cooling, overtemp, fans, filters]
-
-    description: >
-      Overtemperature indicates the charger is exceeding thermal limits or has detected inadequate cooling.
-      Most common field cause is blocked airflow (dirty filters/vents). Fan faults or poor ventilation can also trigger it.
-
-    decision_tree:
-      start_node: T0
-      nodes:
-        T0:
-          prompt: |
-            *Overtemperature detected*
-            Start with airflow checks and filter condition.
-          image: autel/cooling_filters_location
-          options:
-            - label: "Check airflow"
-              next: T1
-
-        T1:
-          prompt: |
-            *Filters dirty?*
-            Inspect filters/vents for blockage.
-          image: autel/cooling_filters_location
-          options:
-            - label: "Yes"
-              next: FIX_FILTERS
-            - label: "No"
-              next: T2
-
-        T2:
-          prompt: |
-            *Check cooling fans*
-            Confirm fans run freely, no obstructions, and airflow direction is correct.
-          image: autel/cooling_fan_location
-          options:
-            - label: "Fans OK"
-              next: MONITOR
-            - label: "Fan not running / blocked"
-              next: FIX_FANS
-
-        FIX_FILTERS:
-          prompt: |
-            *Clean filters*
-            Clean/replace filters, then re-test under load.
-          image: autel/cooling_filters_location
-          options:
-            - label: "Re-test"
-              next: T2
-
-        FIX_FANS:
-          prompt: |
-            *Fix fan issue*
-            Clear obstruction, check fan power/connector, replace fan if failed. Then re-test.
-          image: autel/cooling_fan_location
-          options:
-            - label: "Re-test"
-              next: MONITOR
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and monitor for recurrence.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  # ============================================================
-  # (6) Power Module Fault (kept — still useful as a label/entry)
-  # ============================================================
-
-  - id: autel_power_module_fault
-    platform: autel
-    charger_type: dc
-    title: "Power Module Fault / Module Offline (Autel DC)"
-    severity: high
-    tags: [power_module, rectifier, dc_bus, comms, cooling]
-
-    description: >
-      A power module is offline or reporting a module fault. Start with reseating to rule out poor seating or connection.
-      If it remains offline, suspect module failure, cooling trip, or controller/comms issue.
-
-    decision_tree:
-      start_node: P0
-      nodes:
-        P0:
-          prompt: |
-            *Power module offline*
-            Reseat the affected module to rule out poor seating/connection.
-          options:
-            - label: "Reseat module"
-              next: P1
-
-        P1:
-          prompt: |
-            *Re-test*
-            Confirm whether the module returns online after reseat.
-          options:
-            - label: "Resolved"
-              next: MONITOR
-            - label: "Still offline"
-              next: P2
-
-        P2:
-          prompt: |
-            *If still offline*
-            If you now also see start-inhibit/precharge/contactors, use the *Power-Stage / HV Start Inhibit* flow.
-          options:
-            - label: "🏠 Autel menu"
-              next: __MENU_AUTEL__
-
-        MONITOR:
-          prompt: |
-            *Monitor*
-            Run a test session and confirm stable module operation.
-          options:
-            - label: "Autel menu"
-              next: __MENU_AUTEL__
-
-
-  # ============================================================
-  # (7) TCU Communication Error (as requested)
+  # (7) TCU Communication Error — UPDATED (hardware-aware)
   # ============================================================
 
   - id: autel_tcu_communication_error
     platform: autel
     charger_type: dc
-    title: "TCU Communication Error (Telematics/Comms Module)"
+    title: "TCU Communication Error (Telematics / Comms Module)"
     severity: high
-    tags: [tcu, comms, modem, controller, network, ocpp]
+    tags: [tcu, modem, antenna, harness, network, ocpp]
 
     triggers:
       any_text_contains:
         - "tcu communication"
-        - "tcu comm"
-        - "tcu comms"
         - "tcu offline"
         - "tcu not responding"
         - "telematics"
         - "communication with tcu"
 
     description: >
-      Controller cannot communicate reliably with the TCU. Often presents as intermittent offline events, failed backend
-      registration, or repeated comms alarms. Common causes are control power instability, loose harnessing, modem/TCU crash,
-      SIM/network problems, or controller-side comms issues.
+      Controller cannot communicate reliably with the TCU.
+      Common causes include loose harnessing, antenna/RF issues,
+      control power instability, or TCU/modem failure.
 
     decision_tree:
       start_node: TCU0
       nodes:
+
         TCU0:
           prompt: |
             *TCU Communication Error — Start*
-            Is the charger also showing OCPP/backend offline?
+            Is the charger also offline to the backend?
           options:
-            - label: "✅ Yes (offline as well)"
-              next: TCU1
-            - label: "❌ No (charging works / backend ok)"
-              next: TCU2
-
-        TCU1:
-          prompt: |
-            *TCU + Backend impacted*
-            Start with controlled reboot to recover modem/TCU stack.
-          options:
-            - label: "Reboot / power cycle"
+            - label: "Yes — backend offline"
               next: TCU_REBOOT
-            - label: "Back"
-              next: __MENU_AUTEL__
-
-        TCU2:
-          prompt: |
-            *TCU alarm but backend ok*
-            Treat as intermittent comms/harness/power stability issue.
-          options:
-            - label: "Continue ➡️"
+            - label: "No — charging still works"
               next: TCU_REBOOT
 
         TCU_REBOOT:
           prompt: |
-            *Controlled reboot / power cycle*
-            Reboot via HMI/service menu if available; otherwise controlled power cycle.
+            *Controlled reboot*
+            Reboot the charger (HMI or controlled power cycle).
           options:
-            - label: "Resolved ✅"
+            - label: "Resolved"
               next: TCU_MONITOR
             - label: "Still faulting"
+              next: TCU_HW_CHECK
+
+        TCU_HW_CHECK:
+          prompt: |
+            *TCU hardware checks (do before escalation)*
+            Verify the physical comms path:
+            - Are TCU LEDs illuminated or flashing (power/activity)?
+            - Antenna securely connected and undamaged
+            - If possible, test with a known-good antenna
+            - Confirm all TCU harnesses/connectors are fully seated
+              (power, data, intermediate adapters)
+          options:
+            - label: "Issue found and corrected"
+              next: TCU_RETEST
+            - label: "All checks OK"
+              next: TCU_ESC
+
+        TCU_RETEST:
+          prompt: |
+            *Re-test*
+            Reboot again and allow time for modem registration.
+          options:
+            - label: "Online"
+              next: __MENU_AUTEL__
+            - label: "Still offline"
               next: TCU_ESC
 
         TCU_MONITOR:
           prompt: |
             *Monitor*
-            Confirm stability (no repeated offline/TCU alarms).
+            Confirm no repeated TCU or backend dropouts.
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
@@ -685,7 +171,11 @@ faults:
         TCU_ESC:
           prompt: |
             *Escalate — TCU Communication Error*
-            Include: alarm text + timestamps/frequency, backend impact, and recovery attempts.
+            Include:
+            - LED behaviour
+            - Antenna test performed
+            - Harness checks completed
+            - Frequency/timestamps of fault
           options:
             - label: "Autel menu"
               next: __MENU_AUTEL__
