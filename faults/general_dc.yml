@@ -1,501 +1,670 @@
-# faults/general_dc.yml
-# EVBot Fault Pack: General DC Charger (All Brands)
-# Gold Standard Fault Cards — Technician-first (Jan 2026)
+# general_dc.yml
+# EVBot Fault Pack: General DC (On-site Technician v1) — Kempower-style (symptom-first, gated, canonical clusters)
 #
-# CONTRACT:
-# - Fault IDs are permanent — DO NOT CHANGE
-# - Symptom-first entry
-# - Safety gate early
-# - Explicit outcomes: RESOLVED / STABILISED / ESCALATED
-# - No index.js changes required
+# Philosophy:
+# - A few gold-standard CLUSTERS do the heavy lifting (consistent gates + evidence pack + outcomes)
+# - Many “fault” entries act as ROUTERS (IDs stable for deep-links + familiar labels)
+# - Symptom-first > code-first. Codes route you into the same canonical path.
+#
+# Notes:
+# - Node-based decision tree: start_node + nodes map
+# - node.options MUST be a LIST of {label, next}
+# - image: general_dc/<filename_without_extension> (optional; expects files in assets/images/general_dc/*.png)
 
 faults:
 
   # ============================================================
-  # WILL NOT POWER ON
+  # (1) GOLD STANDARD CLUSTER: HV Enable / Start Inhibit
+  # Canonical flow for:
+  # - Won’t start / start failed
+  # - Precharge / DC bus not ready
+  # - DC output contactor failed to close/verify
+  # - AC input contactor faults that block start
+  # - “Clicks then faults quickly”
   # ============================================================
 
-  - id: general_dc_will_not_power_on
+  - id: general_dc_hv_enable_cluster
     platform: general_dc
     charger_type: dc
-    title: "Will Not Power On (Dead / No Display)"
-    severity: high
-    tags: [power, supply, breaker, interlock, control_power]
+    title: "HV Enable / Start Inhibit (Precharge / DC Bus / Contactors)"
+    severity: critical
+    tags: [hv_enable, start_inhibit, precharge, dc_bus, contactor, interlock, insulation, supply]
 
     aliases:
-      - "no power"
-      - "dead"
-      - "blank screen"
-      - "no display"
-      - "won't power on"
-      - "will not power on"
+      - "start failed"
+      - "start inhibited"
+      - "hv enable fault"
+      - "precharge fault"
+      - "dc bus not ready"
+      - "dc bus undervoltage"
+      - "dc bus overvoltage"
+      - "output contactor fault"
+      - "dc contactor fault"
+      - "ac contactor fault"
+      - "internal power fault"
+      - "clicks then faults"
 
     triggers:
       any_text_contains:
-        - "no power"
-        - "dead"
-        - "blank screen"
-        - "no display"
-        - "won't power on"
-        - "will not power on"
+        - "start failed"
+        - "start inhibited"
+        - "hv enable"
+        - "precharge"
+        - "pre-charge"
+        - "dc bus"
+        - "bus not ready"
+        - "bus undervoltage"
+        - "bus overvoltage"
+        - "output contactor"
+        - "dc contactor"
+        - "ac contactor"
+        - "failed to close"
+        - "verify failed"
+        - "contactor fault"
+        - "interlock"
+        - "hvil"
+        - "e-stop"
+        - "estop"
+        - "insulation"
+        - "isolation"
+        - "imd"
+        - "earth leakage"
+        - "rcm"
+        - "rcd"
 
     description: >
-      The charger shows no signs of life (no display or LEDs). This is most commonly caused by
-      upstream supply loss, an active safety interlock, or failed control power. Confirm supply
-      and interlocks before assuming internal failure.
+      The charger is preventing HV start or cannot complete the HV start sequence (enable → precharge → DC bus build →
+      contactor verification). Fastest wins come from gating: safety/visual → supply sanity → interlock/HVIL →
+      insulation/IMD/earth leakage → controlled reboot → “first fault that returns”. Do not chase parts before gates.
 
     safety_notes:
-      - Apply LOTO before opening cabinets
-      - Do not repeatedly reset tripping breakers
+      - LOTO before opening cabinets; wait minimum 5 minutes for DC bus discharge
+      - Treat insulation/isolation/earth leakage alarms as high risk; avoid repeated start attempts
+      - Do not bypass HVIL/interlocks; do not repeatedly reset trips
+
+    tools_required:
+      - Multimeter (true RMS preferred)
+      - Insulated hand tools
+      - Torch / inspection light
 
     decision_tree:
-      start_node: GDNP0
+      start_node: HV0
       nodes:
 
-        GDNP0:
+        HV0:
           prompt: |
-            *Will Not Power On (Dead / No Display)*
-            What is the scope?
+            ⚡ *General DC — HV Enable / Start Inhibit*
+            Start with what you’re seeing (symptom-first). Pick the closest:
           options:
-            - label: "One charger affected"
-              next: GDNP_SAFETY
-            - label: "Multiple chargers / site-wide"
-              next: GDNP_SAFETY
+            - label: "🚫 Won’t start / fails immediately"
+              next: HV_PATTERN_START_FAIL
+            - label: "⚠️ Clicks/tries then faults quickly"
+              next: HV_PATTERN_CLICKS
+            - label: "🟪 Insulation / Isolation / Earth leakage (IMD/RCM/RCD)"
+              next: HV_ISO_GATE
+            - label: "⬛ Interlock / HVIL / E-stop indicated"
+              next: HV_INTERLOCK_GATE
+            - label: "🔌 Supply unstable / undervoltage / phase issue suspected"
+              next: HV_SUPPLY_GATE
+            - label: "🔎 I have a specific message (precharge/DC bus/contactor)"
+              next: HV_CODE_ROUTER
 
-        GDNP_SAFETY:
+        HV_PATTERN_START_FAIL:
           prompt: |
-            ✅ *Safety first*
-            Can you work safely and apply isolation if required?
+            *Pattern check — Start fails*
+            Do you see an explicit block reason on the HMI/log?
           options:
-            - label: "Yes"
-              next: GDNP_SUPPLY
-            - label: "No / unsure"
-              next: GDNP_ESC
+            - label: "🟪 Isolation/earth leakage (IMD/RCM/RCD)"
+              next: HV_ISO_GATE
+            - label: "⬛ Interlock/HVIL/E-stop"
+              next: HV_INTERLOCK_GATE
+            - label: "🟥 Contactor / Precharge / DC bus"
+              next: HV_SAFE_REBOOT
+            - label: "No obvious reason shown"
+              next: HV_SAFE_REBOOT
 
-        GDNP_SUPPLY:
+        HV_PATTERN_CLICKS:
           prompt: |
-            ⚡ *Upstream supply*
-            Is the isolator/breaker ON and correct AC voltage present?
+            *Pattern check — Clicks then faults*
+            Most often: supply sag at enable, interlock gating, or contactor/DC bus verification.
+            Proceed with a clean safe-first recovery to identify the *first fault that returns*.
           options:
-            - label: "No / tripped / missing voltage"
-              next: GDNP_RESTORE
-            - label: "Yes"
-              next: GDNP_INTERLOCKS
+            - label: "Continue ➡️"
+              next: HV_SAFE_REBOOT
 
-        GDNP_RESTORE:
+        HV_CODE_ROUTER:
           prompt: |
-            *Restore supply (once only if safe)*
+            *Quick routing (choose closest)*
           options:
-            - label: "Recovered"
-              next: GDNP_DONE_RESOLVED
-            - label: "Trips again / unstable"
-              next: GDNP_DONE_STAB
-            - label: "Still dead"
-              next: GDNP_INTERLOCKS
+            - label: "🟥 DC/Output contactor failed / failed to close / verify"
+              next: HV_SAFE_REBOOT
+            - label: "🟦 Precharge fault / DC bus not ready / undervoltage"
+              next: HV_SAFE_REBOOT
+            - label: "🟧 DC bus overvoltage"
+              next: HV_DC_BUS_OV
+            - label: "🟪 Insulation / earth leakage / IMD/RCM/RCD"
+              next: HV_ISO_GATE
+            - label: "⬛ Interlock / HVIL / E-stop"
+              next: HV_INTERLOCK_GATE
+            - label: "❓ Not sure"
+              next: HV_SAFE_REBOOT
 
-        GDNP_INTERLOCKS:
+        HV_SAFE_REBOOT:
           prompt: |
-            ⬛ *Interlocks*
-            Are E-stops / doors / site interlocks active?
+            ✅ *Safe recovery first (do this once, cleanly)*
+            1) Confirm: no smoke/heat/water ingress
+            2) Controlled reboot or full power cycle
+            3) Note the *first* fault/message that returns (root clue)
           options:
-            - label: "Yes"
-              next: GDNP_CLEAR_INTERLOCKS
-            - label: "No"
-              next: GDNP_CONTROL_POWER
+            - label: "Recovered ✅"
+              next: HV_DONE_RESOLVED
+            - label: "Still failing"
+              next: HV_VISUAL
 
-        GDNP_CLEAR_INTERLOCKS:
+        HV_VISUAL:
           prompt: |
-            Clear all interlocks and re-test.
+            👀 *Visual checks (non-invasive)*
+            - Burnt smell / discoloration / melted insulation?
+            - Water ingress / wet marks?
+            - Harness strain / loose external connectors?
           options:
-            - label: "Recovered"
-              next: GDNP_DONE_RESOLVED
-            - label: "Still dead"
-              next: GDNP_CONTROL_POWER
+            - label: "🔥 Unsafe condition found"
+              next: HV_ESC_UNSAFE
+            - label: "Looks OK"
+              next: HV_SUPPLY_GATE
 
-        GDNP_CONTROL_POWER:
+        HV_SUPPLY_GATE:
           prompt: |
-            🔌 *Control power*
-            Is LV/control power present and stable?
+            ⚡ *Supply sanity check*
+            Any upstream trip, undervoltage/phase loss alarm, or known site instability?
           options:
-            - label: "Yes"
-              next: GDNP_REBOOT
-            - label: "No / unstable"
-              next: GDNP_ESC
+            - label: "Yes — supply issue suspected"
+              next: HV_SUPPLY_ACTIONS
+            - label: "No / unknown"
+              next: HV_INTERLOCK_GATE
 
-        GDNP_REBOOT:
+        HV_SUPPLY_ACTIONS:
+          prompt: |
+            *Supply actions (safe-first)*
+            - Check upstream breaker/isolator
+            - If authorised: confirm L-L voltages present and not sagging badly at enable
+            - Stabilise supply before deeper charger work
+          options:
+            - label: "Supply corrected → retry"
+              next: HV_SAFE_REBOOT
+            - label: "Supply seems OK → continue"
+              next: HV_INTERLOCK_GATE
+            - label: "Can’t verify → evidence pack"
+              next: HV_EVIDENCE
+
+        HV_INTERLOCK_GATE:
+          prompt: |
+            ⬛ *Interlock / HVIL gate*
+            If any interlock is open, HV start will be inhibited. Clear this before chasing power-stage parts.
+          options:
+            - label: "Interlock cleared → retry"
+              next: HV_SAFE_REBOOT
+            - label: "Interlock won’t clear"
+              next: HV_EVIDENCE
+
+        HV_ISO_GATE:
+          prompt: |
+            🟪 *Isolation / Earth leakage gate (high risk)*
+            Treat as safety critical:
+            - Avoid repeated start attempts
+            - Inspect connector face + cabinet for moisture/contamination/burn marks
+            - If repeatable: tag out the port and escalate
+          options:
+            - label: "Continue ➡️"
+              next: HV_ISO_ACTIONS
+
+        HV_ISO_ACTIONS:
+          prompt: |
+            *Isolation actions*
+            - Record exact IMD/RCM/RCD message + timestamp
+            - Inspect connector face (water/debris/burn marks)
+            - Note weather / rain / washdown / flooding
+          options:
+            - label: "Evidence pack"
+              next: HV_EVIDENCE
+            - label: "Back to General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        HV_DC_BUS_OV:
+          prompt: |
+            🟧 *DC bus overvoltage*
+            Do NOT repeatedly retry. Capture evidence and escalate.
+          options:
+            - label: "Evidence pack"
+              next: HV_EVIDENCE
+            - label: "Back to General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        HV_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack (fast escalation)*
+            Capture:
+            - Exact message/code + timestamp
+            - State: start fails vs clicks then faults
+            - Any supply alarms / measured L-L (if taken)
+            - Interlock/HVIL status (if shown)
+            - IMD/RCM/RCD status (if shown)
+            - Actions taken (reboot/power cycle)
+          options:
+            - label: "Escalate"
+              next: HV_ESC
+            - label: "Back to General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        HV_ESC_UNSAFE:
+          prompt: |
+            *⚠️ Escalate immediately — unsafe condition*
+            Do NOT re-energise.
+            Provide photos + what you observed (smell/heat/water ingress).
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        HV_ESC:
+          prompt: |
+            *Escalate — General DC HV Enable / Start Inhibit*
+            Include:
+            - Exact code/text + timestamps
+            - State: start fails vs clicks then faults
+            - Supply notes (alarms / measured L-L if available)
+            - Interlock/HVIL + IMD/RCM/RCD status
+            - Actions taken (reboot/power cycle)
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        HV_DONE_RESOLVED:
+          prompt: |
+            ✅ *Resolved*
+            HV start restored. Run a short test session and confirm no recurrence.
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+
+  # ============================================================
+  # (2) GOLD STANDARD CLUSTER: Power Modules Offline / Derating
+  # Canonical flow for:
+  # - Reduced kW / derate
+  # - Module offline / rectifier fault
+  # - Power stack imbalance / output instability
+  # ============================================================
+
+  - id: general_dc_power_module_cluster
+    platform: general_dc
+    charger_type: dc
+    title: "Power Modules Offline / Derating (Reduced kW / Rectifier)"
+    severity: high
+    tags: [power_module, derate, rectifier, reduced_kw, cooling, module_offline]
+
+    aliases:
+      - "derating"
+      - "reduced power"
+      - "reduced kw"
+      - "module offline"
+      - "rectifier fault"
+      - "power module fault"
+      - "stack fault"
+      - "power stage derate"
+
+    triggers:
+      any_text_contains:
+        - "derate"
+        - "derating"
+        - "reduced power"
+        - "reduced kw"
+        - "module offline"
+        - "rectifier"
+        - "power module"
+        - "stack fault"
+        - "power module fault"
+
+    description: >
+      Charger can often still operate but with reduced kW when modules are offline or thermally/electrically limited.
+      Goal is to: (1) identify scope (one module vs many), (2) do safe recovery (cycle), (3) check cooling basics,
+      (4) reseat/swap only if authorised, and (5) record derate level + stability.
+
+    safety_notes:
+      - LOTO before cabinet access and any reseat/swap activity
+      - Do not repeatedly reset trips—identify cause
+      - If burning smell/heat/water ingress: stop and escalate
+
+    decision_tree:
+      start_node: PM0
+      nodes:
+
+        PM0:
+          prompt: |
+            🧩 *Power Modules Offline / Derating — Start*
+            What are you seeing?
+          options:
+            - label: "⚠️ Charging but reduced kW"
+              next: PM_SCOPE
+            - label: "🚫 Charger unavailable (many modules offline)"
+              next: PM_SCOPE
+            - label: "🔎 I have a module/rectifier alarm"
+              next: PM_SCOPE
+
+        PM_SCOPE:
+          prompt: |
+            *Scope*
+            Is it clearly one cabinet/module, or multiple/unclear?
+          options:
+            - label: "One module/cabinet"
+              next: PM_SAFE_GATE
+            - label: "Multiple / unclear"
+              next: PM_SAFE_GATE
+
+        PM_SAFE_GATE:
+          prompt: |
+            ✅ *Safety gate*
+            - LOTO if opening cabinet
+            - If heat/smell/smoke/water ingress: stop and escalate
+          options:
+            - label: "Continue ➡️"
+              next: PM_POWER_CYCLE
+
+        PM_POWER_CYCLE:
           prompt: |
             🔁 *Controlled power cycle*
+            Power cycle once, then note what changed (which alarms remain).
           options:
-            - label: "Recovered"
-              next: GDNP_DONE_RESOLVED
-            - label: "Recovered but unstable"
-              next: GDNP_DONE_STAB
-            - label: "Still dead"
-              next: GDNP_ESC
+            - label: "Recovered (normal output) ✅"
+              next: PM_DONE_RESOLVED
+            - label: "Recovered but still derated ⚠️"
+              next: PM_DERATE_RECORD
+            - label: "Still faulting"
+              next: PM_COOLING
 
-        GDNP_DONE_RESOLVED:
+        PM_COOLING:
+          prompt: |
+            🟫 *Cooling basics (highest yield)*
+            Check airflow, filters, fan operation, ventilation around cabinet.
+          options:
+            - label: "Cooling issue found & corrected → retest"
+              next: PM_POWER_CYCLE
+            - label: "Cooling seems OK / not sure"
+              next: PM_RESEAT_GATE
+
+        PM_RESEAT_GATE:
+          prompt: |
+            *Reseat/swap (authorised only)*
+            Are you authorised to reseat or swap modules?
+          options:
+            - label: "Yes — authorised"
+              next: PM_RESEAT
+            - label: "No — not authorised"
+              next: PM_EVIDENCE
+
+        PM_RESEAT:
+          prompt: |
+            *Reseat / connector inspection*
+            - LOTO
+            - Reseat suspected module connectors
+            - Inspect pins for burn/bend/contamination
+          options:
+            - label: "🔥 Damage found"
+              next: PM_ESC_UNSAFE
+            - label: "Reseated → retest"
+              next: PM_POWER_CYCLE
+            - label: "No change"
+              next: PM_SWAP
+
+        PM_SWAP:
+          prompt: |
+            🧩 *Swap test (if allowed)*
+            Move suspected module to another slot and see if fault follows.
+          options:
+            - label: "Fault follows module"
+              next: PM_REPLACE_MODULE
+            - label: "Fault stays with slot/backplane"
+              next: PM_SLOT_ISSUE
+            - label: "Can’t swap"
+              next: PM_EVIDENCE
+
+        PM_DERATE_RECORD:
+          prompt: |
+            ⚠️ *Derated but operating*
+            Record:
+            - Delivered kW and whether stable/fluctuating
+            - Which cabinet/module indicated (if any)
+            Then decide: accept temporary derate or escalate for module service.
+          options:
+            - label: "Accept derate (document + monitor)"
+              next: PM_DONE_STABILISED
+            - label: "Evidence pack"
+              next: PM_EVIDENCE
+
+        PM_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Derating / Modules*
+            Capture:
+            - Exact alarm text + timestamp
+            - Delivered kW (stable/fluctuating)
+            - Any cabinet/module/slot indicator
+            - Cooling condition notes
+            - Actions taken (cycle/reseat/swap)
+          options:
+            - label: "Escalate"
+              next: PM_ESC
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        PM_ESC_UNSAFE:
+          prompt: |
+            *⚠️ Escalate — unsafe condition*
+            Do NOT re-energise. Provide photos of damage/burn/water ingress.
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        PM_ESC:
+          prompt: |
+            *Escalate — Power Modules Offline / Derating*
+            Include evidence pack + whether fault follows a module or stays with slot/backplane.
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        PM_REPLACE_MODULE:
+          prompt: |
+            ✅ *Fault follows module*
+            Likely module failure. Replace per OEM procedure and retest.
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        PM_SLOT_ISSUE:
+          prompt: |
+            🧩 *Fault stays with slot/backplane*
+            Likely harness/backplane/controller-side issue. Escalate with photos + evidence.
+          options:
+            - label: "Evidence pack"
+              next: PM_EVIDENCE
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        PM_DONE_RESOLVED:
           prompt: |
             ✅ *Resolved*
-            Charger powered on normally.
-            Use **Create report for this fault**.
+            Normal output restored. Confirm stability (no immediate re-fault).
           options:
-            - label: "🏠 Back to General DC menu"
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
-        GDNP_DONE_STAB:
+        PM_DONE_STABILISED:
           prompt: |
-            ⚠️ *Stabilised*
-            Charger powered but supply/interlock is intermittent.
-            Document conditions and follow up.
-            Use **Create report for this fault**.
+            ⚠️ *Stabilised (Derated)*
+            Charger operates but reduced power. Plan follow-up if derate persists.
           options:
-            - label: "🏠 Back to General DC menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDNP_ESC:
-          prompt: |
-            *Escalate — Will Not Power On*
-            Include supply state, interlocks, actions attempted,
-            timestamps, and photos if safe.
-          options:
-            - label: "🏠 Back to General DC menu"
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
 
   # ============================================================
-  # POWERS ON BUT WON’T START
+  # (3) GOLD STANDARD CLUSTER: Offline / Backend / OCPP / Network
+  # Canonical flow for:
+  # - Offline / no backend
+  # - OCPP errors
+  # - Ethernet/LTE issues
+  # - Intermittent comms
   # ============================================================
 
-  - id: general_dc_powers_on_wont_start_charge
+  - id: general_dc_comms_offline_cluster
     platform: general_dc
     charger_type: dc
-    title: "Powers On but Won’t Start Charging"
+    title: "Offline / Backend / OCPP / Network (Ethernet/LTE)"
     severity: high
-    tags: [session, authorisation, contactor, handshake]
+    tags: [ocpp, backend, network, ethernet, lte, modem, offline]
 
     aliases:
-      - "won't start"
-      - "cannot start charge"
-      - "start failed"
-      - "plugged in but won't charge"
-
-    triggers:
-      any_text_contains:
-        - "won't start charging"
-        - "cannot start"
-        - "start failed"
-        - "plugged in but won't charge"
-
-    description: >
-      The charger is powered and responsive but cannot begin a session.
-      This is usually caused by readiness issues, authorisation blocks,
-      vehicle handshake failures, or internal safety conditions.
-
-    decision_tree:
-      start_node: GDST0
-      nodes:
-
-        GDST0:
-          prompt: |
-            *Powers On but Won’t Start Charging*
-            Is any fault message shown?
-          options:
-            - label: "Yes — a fault is shown"
-              next: GDST_ROUTE
-            - label: "No — just won’t start"
-              next: GDST_BASICS
-
-        GDST_BASICS:
-          prompt: |
-            Confirm basics: connector latched, correct plug selected,
-            charger shows Ready.
-          options:
-            - label: "All OK"
-              next: GDST_SWAP
-            - label: "Issue found"
-              next: GDST_SWAP
-
-        GDST_SWAP:
-          prompt: |
-            Try known-good EV or alternate connector.
-          options:
-            - label: "Still fails"
-              next: GDST_ROUTE
-            - label: "Works"
-              next: GDST_DONE_RESOLVED
-
-        GDST_ROUTE:
-          prompt: |
-            Route by fault type shown:
-          options:
-            - label: "🟦 Handshake / vehicle comms"
-              next: "__MENU_GENERAL_DC__"
-            - label: "🟪 Insulation / earth fault"
-              next: "__MENU_GENERAL_DC__"
-            - label: "⬛ E-stop / interlock"
-              next: "__MENU_GENERAL_DC__"
-            - label: "🟫 Overtemp / cooling"
-              next: "__MENU_GENERAL_DC__"
-            - label: "🟥 HV / precharge blocked"
-              next: GDST_ESC
-
-        GDST_DONE_RESOLVED:
-          prompt: |
-            ✅ *Resolved*
-            Session starts normally.
-            Use **Create report for this fault** if repeatable.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDST_ESC:
-          prompt: |
-            *Escalate — Won’t Start Charging*
-            Include EV model, connector used, fault text,
-            timestamps, and actions attempted.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-
-  # ============================================================
-  # OFFLINE / BACKEND COMMS
-  # ============================================================
-
-  - id: general_dc_offline_backend_comms
-    platform: general_dc
-    charger_type: dc
-    title: "Offline / Backend Comms Down (OCPP / LTE / Ethernet)"
-    severity: high
-    tags: [comms, ocpp, modem, ethernet, sim]
-
-    aliases:
-      - "offline"
       - "ocpp offline"
-      - "backend down"
+      - "backend offline"
+      - "server offline"
+      - "charger offline"
+      - "network error"
       - "no communication"
+      - "communication fault"
+      - "websocket"
+      - "tls handshake"
 
     triggers:
       any_text_contains:
-        - "offline"
         - "ocpp"
-        - "no comms"
-        - "backend offline"
-        - "modem offline"
-
-    description: >
-      The charger cannot communicate with the backend due to LTE,
-      Ethernet, or site network issues. Identify link type first,
-      then follow the correct recovery order.
-
-    decision_tree:
-      start_node: GDOC0
-      nodes:
-
-        GDOC0:
-          prompt: |
-            *Offline / Backend Comms*
-            What link type is used?
-          options:
-            - label: "LTE / Cellular"
-              next: GDOC_LTE
-            - label: "Ethernet"
-              next: GDOC_ETH
-            - label: "Not sure"
-              next: GDOC_REBOOT
-
-        GDOC_LTE:
-          prompt: |
-            Check modem power, antenna, and signal.
-          options:
-            - label: "Recovered"
-              next: GDOC_DONE_RESOLVED
-            - label: "Still offline"
-              next: GDOC_REBOOT
-
-        GDOC_ETH:
-          prompt: |
-            Check link lights, cabling, and switch port.
-          options:
-            - label: "Recovered"
-              next: GDOC_DONE_RESOLVED
-            - label: "Still offline"
-              next: GDOC_REBOOT
-
-        GDOC_REBOOT:
-          prompt: |
-            Reboot modem/router first, then charger.
-          options:
-            - label: "Recovered"
-              next: GDOC_DONE_RESOLVED
-            - label: "Still offline"
-              next: GDOC_ESC
-
-        GDOC_DONE_RESOLVED:
-          prompt: |
-            ✅ *Resolved*
-            Backend comms restored.
-            Use **Create report for this fault** if repeatable.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDOC_ESC:
-          prompt: |
-            *Escalate — Offline / Backend Comms*
-            Include link type, ICCID/IMEI or MAC,
-            timestamps, and reboot order.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-
-  # ============================================================
-  # HANDSHAKE FAILURE
-  # ============================================================
-
-  - id: general_dc_vehicle_handshake_failure
-    platform: general_dc
-    charger_type: dc
-    title: "Vehicle Connection / Handshake Failure"
-    severity: medium
-    tags: [handshake, connector, cp, pp]
-
-    aliases:
-      - "handshake failed"
-      - "vehicle not detected"
-      - "plug error"
-
-    triggers:
-      any_text_contains:
+        - "offline"
+        - "backend"
+        - "server"
+        - "network"
+        - "no communication"
+        - "communication fault"
+        - "websocket"
         - "handshake"
-        - "vehicle not detected"
-        - "plug error"
-        - "cp"
-        - "pp"
+        - "tls"
+        - "ethernet"
+        - "lte"
+        - "modem"
+        - "sim"
 
     description: >
-      The EV and charger fail to complete initial communication.
-      Most often caused by connector condition or vehicle-side limits.
+      Treat comms as a layered problem: site-wide vs single unit → controlled reboot → physical layer checks
+      (Ethernet link/ports/cable OR LTE antenna/SIM) → evidence pack. Escalate quickly when you lack visibility.
+
+    safety_notes:
+      - Most checks are low risk and can be done without HV compartment access
+      - Follow ESD precautions if accessing comms hardware
 
     decision_tree:
-      start_node: GDHS0
+      start_node: CO0
       nodes:
 
-        GDHS0:
+        CO0:
           prompt: |
-            Inspect connector for damage or contamination.
+            🌐 *Offline / Backend / OCPP — Start*
+            Is it only this charger, or multiple chargers/site affected?
           options:
-            - label: "Damage found"
-              next: GDHS_ESC
-            - label: "Looks OK"
-              next: GDHS_SWAP
+            - label: "Multiple chargers / site-wide issue likely"
+              next: CO_SITE
+            - label: "Only this charger"
+              next: CO_REBOOT
+            - label: "Not sure"
+              next: CO_REBOOT
 
-        GDHS_SWAP:
+        CO_SITE:
           prompt: |
-            Try alternate connector or known-good EV.
+            *Site-wide comms likely*
+            - Check site router/modem power
+            - Check WAN status (if known)
+            - Capture timestamps + site notes
           options:
-            - label: "Works"
-              next: GDHS_DONE_STAB
-            - label: "Fails"
-              next: GDHS_REBOOT
+            - label: "After site checks → reboot this charger"
+              next: CO_REBOOT
+            - label: "Evidence pack"
+              next: CO_EVIDENCE
 
-        GDHS_REBOOT:
+        CO_REBOOT:
           prompt: |
-            Controlled reboot and retry.
+            *Controlled reboot / power cycle*
+            Reboot and allow time for registration + OCPP handshake.
           options:
-            - label: "Recovered"
-              next: GDHS_DONE_RESOLVED
-            - label: "Still failing"
-              next: GDHS_ESC
+            - label: "Recovered (online) ✅"
+              next: CO_DONE
+            - label: "Still offline"
+              next: CO_LINK_TYPE
 
-        GDHS_DONE_RESOLVED:
+        CO_LINK_TYPE:
           prompt: |
-            ✅ *Resolved*
-            Handshake successful.
+            *Connection type*
+            What’s in use?
           options:
-            - label: "🏠 Back to menu"
+            - label: "📶 Cellular/LTE"
+              next: CO_LTE
+            - label: "🔌 Ethernet"
+              next: CO_ETH
+            - label: "❓ Not sure"
+              next: CO_EVIDENCE
+
+        CO_LTE:
+          prompt: |
+            *LTE checks*
+            - Antenna seated/tight, cable not damaged
+            - If accessible: observe modem/TCU LEDs (power/status/network)
+            - If permitted: reseat SIM, confirm APN profile
+          options:
+            - label: "Retest (reboot)"
+              next: CO_REBOOT
+            - label: "Evidence pack"
+              next: CO_EVIDENCE
+
+        CO_ETH:
+          prompt: |
+            *Ethernet checks*
+            - Link lights present at charger/switch?
+            - Reseat cable ends
+            - Try alternate port/cable (if permitted)
+          options:
+            - label: "Retest (reboot)"
+              next: CO_REBOOT
+            - label: "Evidence pack"
+              next: CO_EVIDENCE
+
+        CO_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Comms/Backend*
+            Capture:
+            - Offline message + timestamp
+            - Connection type (LTE/Ethernet/unknown)
+            - Link lights / signal strength / LED states (if known)
+            - Actions taken (reboot/cables/antenna/SIM/APN)
+          options:
+            - label: "Escalate"
+              next: CO_ESC
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
-        GDHS_DONE_STAB:
+        CO_ESC:
           prompt: |
-            ⚠️ *Stabilised*
-            Likely connector or vehicle-specific.
-            Tag connector and document.
+            *Escalate — Offline/Backend/OCPP*
+            Include evidence pack + last known online time (if known).
           options:
-            - label: "🏠 Back to menu"
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
-        GDHS_ESC:
+        CO_DONE:
           prompt: |
-            *Escalate — Handshake Failure*
-            Include photos, EV model, connector ID,
-            and timestamps.
+            ✅ *Recovered*
+            Confirm stability (no repeated dropouts).
           options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-
-  # ============================================================
-  # INSULATION / EARTH FAULT
-  # ============================================================
-
-  - id: general_dc_insulation_earth_fault
-    platform: general_dc
-    charger_type: dc
-    title: "Insulation / Earth Fault"
-    severity: high
-    tags: [safety, insulation, imd]
-
-    aliases:
-      - "insulation fault"
-      - "earth fault"
-      - "imd fault"
-
-    triggers:
-      any_text_contains:
-        - "insulation"
-        - "earth fault"
-        - "imd"
-
-    description: >
-      Indicates leakage to earth. Treat as safety-critical.
-      Stabilise safely and escalate with evidence.
-
-    decision_tree:
-      start_node: GDIM0
-      nodes:
-
-        GDIM0:
-          prompt: |
-            Is this occurring with or without an EV connected?
-          options:
-            - label: "Without EV"
-              next: GDIM_ESC
-            - label: "Only with EV"
-              next: GDIM_DONE_STAB
-
-        GDIM_DONE_STAB:
-          prompt: |
-            ⚠️ *Stabilised*
-            Likely vehicle or connector leakage.
-            Take out of service if repeatable.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDIM_ESC:
-          prompt: |
-            *Escalate — Insulation / Earth Fault*
-            Include moisture evidence, photos,
-            timestamps, and test results if authorised.
-          options:
-            - label: "🏠 Back to menu"
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
 
   # ============================================================
-  # OVERTEMP / COOLING
+  # (4) Cooling / Overtemperature (lightweight but useful)
   # ============================================================
 
   - id: general_dc_overtemp_cooling_fault
@@ -503,225 +672,424 @@ faults:
     charger_type: dc
     title: "Overtemperature / Cooling Fault"
     severity: high
-    tags: [thermal, cooling]
+    tags: [cooling, overtemp, fans, filters, airflow]
 
     aliases:
       - "overtemp"
-      - "cooling fault"
+      - "over temperature"
+      - "thermal fault"
       - "fan fault"
+      - "cooling fault"
 
     triggers:
       any_text_contains:
         - "overtemp"
-        - "cooling fault"
+        - "over temperature"
+        - "thermal"
         - "fan fault"
+        - "cooling"
+        - "temperature high"
 
     description: >
-      Caused by blocked airflow, fan/pump failure,
-      or extreme ambient conditions.
+      Fastest wins are airflow and filters, then fan operation. If it persists, capture evidence and escalate.
 
     decision_tree:
-      start_node: GDTH0
+      start_node: TH0
       nodes:
 
-        GDTH0:
+        TH0:
           prompt: |
-            Is the charger derating or shutting down?
+            🟫 *Overtemperature / Cooling — Start*
+            First: airflow and filters.
           options:
-            - label: "Derating"
-              next: GDTH_DONE_STAB
-            - label: "Shutdown"
-              next: GDTH_ESC
+            - label: "Continue ➡️"
+              next: TH1
 
-        GDTH_DONE_STAB:
+        TH1:
           prompt: |
-            ⚠️ *Stabilised*
-            Improve airflow and plan follow-up service.
+            *Filters/vents blocked?*
+            Inspect filters/vents for dust blockage and cabinet airflow.
           options:
-            - label: "🏠 Back to menu"
+            - label: "Yes — blocked/dirty"
+              next: TH_FIX_FILTERS
+            - label: "No — looks OK"
+              next: TH2
+
+        TH_FIX_FILTERS:
+          prompt: |
+            *Clean/replace filters*
+            Clean/replace filters then retest under load.
+          options:
+            - label: "Retest"
+              next: TH2
+
+        TH2:
+          prompt: |
+            *Fan check*
+            Confirm fans are operating and unobstructed.
+          options:
+            - label: "Fans OK"
+              next: TH_DONE_OR_ESC
+            - label: "Fan not running / blocked"
+              next: TH_FIX_FANS
+
+        TH_FIX_FANS:
+          prompt: |
+            *Fix fan issue*
+            Clear obstruction, check fan connector/power, replace fan if failed. Then retest.
+          options:
+            - label: "Retest"
+              next: TH_DONE_OR_ESC
+
+        TH_DONE_OR_ESC:
+          prompt: |
+            Did the fault clear after airflow/fan actions?
+          options:
+            - label: "Cleared ✅"
+              next: TH_DONE
+            - label: "Still faulting"
+              next: TH_EVIDENCE
+
+        TH_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Cooling*
+            Capture: ambient temp, filter condition, fan status, timestamps, and any thermal readings shown.
+          options:
+            - label: "Escalate"
+              next: TH_ESC
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
-        GDTH_ESC:
+        TH_ESC:
           prompt: |
-            *Escalate — Overtemp*
-            Include ambient temp, airflow condition,
-            and photos of vents/filters.
+            *Escalate — Overtemperature/Cooling*
+            Include evidence pack + whether it occurs immediately or only under load.
           options:
-            - label: "🏠 Back to menu"
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
-
-  # ============================================================
-  # E-STOP / INTERLOCK
-  # ============================================================
-
-  - id: general_dc_estop_interlock_active
-    platform: general_dc
-    charger_type: dc
-    title: "Emergency Stop / Safety Interlock Active"
-    severity: high
-    tags: [safety, interlock, estop]
-
-    aliases:
-      - "e-stop"
-      - "interlock open"
-      - "door open"
-
-    triggers:
-      any_text_contains:
-        - "e-stop"
-        - "interlock"
-        - "door open"
-
-    description: >
-      A safety loop is open. Clear the indicated interlock
-      and confirm the charger returns to Ready.
-
-    decision_tree:
-      start_node: GDIL0
-      nodes:
-
-        GDIL0:
-          prompt: |
-            Identify which interlock is active.
-          options:
-            - label: "E-stop"
-              next: GDIL_DONE_RESOLVED
-            - label: "Door / HVIL / Site interlock"
-              next: GDIL_DONE_RESOLVED
-
-        GDIL_DONE_RESOLVED:
+        TH_DONE:
           prompt: |
             ✅ *Resolved*
-            Interlock cleared and charger ready.
+            Run a short test session and confirm no recurrence.
           options:
-            - label: "🏠 Back to menu"
+            - label: "General DC menu"
               next: "__MENU_GENERAL_DC__"
 
 
   # ============================================================
-  # LOW POWER / DERATING
+  # (5) Electrical Safety / Earth Leakage / Isolation (strict)
   # ============================================================
 
-  - id: general_dc_power_derating_low_power
+  - id: general_dc_safety_earth_leakage_fault
     platform: general_dc
     charger_type: dc
-    title: "Low Power / Derating"
-    severity: medium
-    tags: [performance, derating]
+    title: "Electrical Safety Fault (Earth Leakage / Isolation / IMD/RCM/RCD)"
+    severity: critical
+    tags: [safety, earth_leakage, insulation, isolation, imd, rcm, rcd, moisture]
 
     aliases:
-      - "slow charging"
-      - "low power"
-      - "derating"
+      - "earth leakage"
+      - "rcd tripped"
+      - "rcm tripped"
+      - "imd fault"
+      - "isolation fault"
+      - "insulation fault"
+      - "ground fault"
+      - "safety fault"
 
     triggers:
       any_text_contains:
-        - "slow"
-        - "low power"
+        - "earth leakage"
+        - "ground fault"
+        - "rcd"
+        - "rcm"
+        - "imd"
+        - "isolation"
+        - "insulation"
+        - "safety fault"
+
+    description: >
+      Treat as safety critical. Avoid repeated attempts. Check for moisture/contamination and capture evidence for escalation.
+
+    decision_tree:
+      start_node: SF0
+      nodes:
+
+        SF0:
+          prompt: |
+            🟪 *Electrical Safety — Start (High risk)*
+            Any evidence of moisture/water ingress or recent rain/washdown?
+          options:
+            - label: "Yes / likely"
+              next: SF1
+            - label: "No / unsure"
+              next: SF1
+
+        SF1:
+          prompt: |
+            *Immediate actions*
+            - Avoid repeated start attempts
+            - Inspect connector face for water/debris/burn marks
+            - Inspect cabinet exterior for water paths
+          options:
+            - label: "Evidence pack"
+              next: SF_EVIDENCE
+            - label: "Back to General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        SF_EVIDENCE:
+          prompt: |
+            🗂️ *Evidence pack — Safety*
+            Capture:
+            - Exact alarm text + timestamp
+            - Weather/moisture notes
+            - Photos of connector face and any moisture marks
+            - Whether fault is repeatable across EVs/ports
+          options:
+            - label: "Escalate"
+              next: SF_ESC
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+        SF_ESC:
+          prompt: |
+            *Escalate — Electrical Safety*
+            Do not re-energise if any burning smell/heat/water ingress is present.
+            Include evidence pack.
+          options:
+            - label: "General DC menu"
+              next: "__MENU_GENERAL_DC__"
+
+
+  # ============================================================
+  # ROUTERS (IDs stay stable; route into canonical clusters)
+  # ============================================================
+
+  - id: general_dc_ac_contactor_fault_routed
+    platform: general_dc
+    charger_type: dc
+    title: "AC Contactor Fault — Routed (Use HV Enable Cluster)"
+    severity: high
+    tags: [routed, ac_contactor, hv_enable, start_inhibit]
+
+    aliases:
+      - "ac contactor fault"
+      - "input contactor fault"
+      - "mains contactor fault"
+      - "input relay fault"
+
+    triggers:
+      any_text_contains:
+        - "ac contactor"
+        - "input contactor"
+        - "mains contactor"
+        - "input relay"
+
+    description: >
+      Routed: AC contactor issues typically block HV enable and share root causes with start sequence gates
+      (supply stability → interlock/HVIL → isolation → reboot-first-fault). Use the canonical cluster.
+
+    decision_tree:
+      start_node: R1
+      nodes:
+        R1:
+          prompt: |
+            ⚡ *AC Contactor Fault — Routed*
+            Open:
+            *HV Enable / Start Inhibit (Precharge / DC Bus / Contactors)*
+            and follow the symptom-first gates.
+          options:
+            - label: "🏠 General DC menu (open HV Enable cluster)"
+              next: "__MENU_GENERAL_DC__"
+
+
+  - id: general_dc_dc_contactor_fault_routed
+    platform: general_dc
+    charger_type: dc
+    title: "DC/Output Contactor Fault — Routed (Use HV Enable Cluster)"
+    severity: high
+    tags: [routed, dc_contactor, hv_enable, start_inhibit]
+
+    aliases:
+      - "dc contactor fault"
+      - "output contactor fault"
+      - "failed to close"
+      - "verify failed"
+      - "welded contactor"
+
+    triggers:
+      any_text_contains:
+        - "dc contactor"
+        - "output contactor"
+        - "failed to close"
+        - "verify failed"
+        - "welded"
+
+    description: >
+      Routed: Contactor faults are part of the HV enable sequence. Use the canonical HV Enable / Start Inhibit cluster.
+
+    decision_tree:
+      start_node: R2
+      nodes:
+        R2:
+          prompt: |
+            ⚡ *DC/Output Contactor Fault — Routed*
+            Open:
+            *HV Enable / Start Inhibit (Precharge / DC Bus / Contactors)*
+            and follow supply → interlock → isolation → evidence.
+          options:
+            - label: "🏠 General DC menu (open HV Enable cluster)"
+              next: "__MENU_GENERAL_DC__"
+
+
+  - id: general_dc_precharge_fault_routed
+    platform: general_dc
+    charger_type: dc
+    title: "Precharge Fault / DC Bus Not Ready — Routed (Use HV Enable Cluster)"
+    severity: critical
+    tags: [routed, precharge, dc_bus, hv_enable]
+
+    aliases:
+      - "precharge fault"
+      - "pre-charge fault"
+      - "dc bus not ready"
+      - "dc bus undervoltage"
+
+    triggers:
+      any_text_contains:
+        - "precharge"
+        - "pre-charge"
+        - "dc bus not ready"
+        - "bus not ready"
+        - "bus undervoltage"
+
+    description: >
+      Routed: Precharge/DC bus faults are the HV start sequence. Use the canonical HV Enable / Start Inhibit cluster.
+
+    decision_tree:
+      start_node: R3
+      nodes:
+        R3:
+          prompt: |
+            ⚡ *Precharge / DC Bus — Routed*
+            Open:
+            *HV Enable / Start Inhibit (Precharge / DC Bus / Contactors)*
+            and follow the symptom-first gates.
+          options:
+            - label: "🏠 General DC menu (open HV Enable cluster)"
+              next: "__MENU_GENERAL_DC__"
+
+
+  - id: general_dc_internal_power_fault_routed
+    platform: general_dc
+    charger_type: dc
+    title: "Internal Power Fault / Start Failed — Routed (Use HV Enable Cluster)"
+    severity: critical
+    tags: [routed, internal_power, start_failed, hv_enable]
+
+    aliases:
+      - "internal power fault"
+      - "internal fault"
+      - "start failed"
+      - "start inhibited"
+
+    triggers:
+      any_text_contains:
+        - "internal power"
+        - "internal fault"
+        - "start failed"
+        - "start inhibited"
+
+    description: >
+      Routed: Generic internal/start faults resolve fastest through the canonical gate sequence. Use the HV Enable cluster.
+
+    decision_tree:
+      start_node: R4
+      nodes:
+        R4:
+          prompt: |
+            ⚡ *Internal Power / Start Failed — Routed*
+            Open:
+            *HV Enable / Start Inhibit (Precharge / DC Bus / Contactors)*
+            and use reboot-first-fault + evidence pack for escalation.
+          options:
+            - label: "🏠 General DC menu (open HV Enable cluster)"
+              next: "__MENU_GENERAL_DC__"
+
+
+  - id: general_dc_rectifier_fault_routed
+    platform: general_dc
+    charger_type: dc
+    title: "Rectifier / Power Module Fault — Routed (Use Power Module Cluster)"
+    severity: high
+    tags: [routed, rectifier, power_module, derate]
+
+    aliases:
+      - "rectifier fault"
+      - "power module fault"
+      - "module offline"
+      - "stack fault"
+      - "derate"
+
+    triggers:
+      any_text_contains:
+        - "rectifier"
+        - "power module"
+        - "module offline"
+        - "stack fault"
         - "derate"
 
     description: >
-      Reduced power due to EV limits, site limits,
-      thermal derating, or supply quality.
+      Routed: Rectifier/module alarms are handled best via the Power Modules Offline / Derating cluster.
 
     decision_tree:
-      start_node: GDLW0
+      start_node: R5
       nodes:
-
-        GDLW0:
+        R5:
           prompt: |
-            Is this likely EV-limited or site-limited?
+            🧩 *Rectifier / Power Module — Routed*
+            Open:
+            *Power Modules Offline / Derating (Reduced kW / Rectifier)*
+            and follow scope → cycle → cooling → authorised reseat/swap → evidence.
           options:
-            - label: "Likely EV / site"
-              next: GDLW_DONE_STAB
-            - label: "Unclear"
-              next: GDLW_ESC
-
-        GDLW_DONE_STAB:
-          prompt: |
-            ⚠️ *Stabilised*
-            Document delivered kW, EV model, and conditions.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDLW_ESC:
-          prompt: |
-            *Escalate — Low Power*
-            Include delivered kW, EV model,
-            site limits, and timestamps.
-          options:
-            - label: "🏠 Back to menu"
+            - label: "🏠 General DC menu (open Power Module cluster)"
               next: "__MENU_GENERAL_DC__"
 
 
-  # ============================================================
-  # HMI FROZEN
-  # ============================================================
-
-  - id: general_dc_hmi_frozen_unresponsive
+  - id: general_dc_backend_offline_routed
     platform: general_dc
     charger_type: dc
-    title: "HMI Frozen / Unresponsive"
-    severity: medium
-    tags: [hmi, ui, reboot]
+    title: "Backend / OCPP Offline — Routed (Use Offline/Network Cluster)"
+    severity: high
+    tags: [routed, ocpp, backend, offline, network]
 
     aliases:
-      - "screen frozen"
-      - "unresponsive"
+      - "ocpp offline"
+      - "backend offline"
+      - "server offline"
+      - "charger offline"
 
     triggers:
       any_text_contains:
-        - "frozen"
-        - "unresponsive"
+        - "ocpp"
+        - "backend offline"
+        - "server offline"
+        - "charger offline"
+        - "offline to backend"
 
     description: >
-      The screen is on but the UI is unresponsive due to a software hang.
+      Routed: Backend/offline issues are handled via the Offline / Backend / OCPP / Network cluster.
 
     decision_tree:
-      start_node: GDUI0
+      start_node: R6
       nodes:
-
-        GDUI0:
+        R6:
           prompt: |
-            Is there an active charging session?
+            🌐 *Backend / OCPP Offline — Routed*
+            Open:
+            *Offline / Backend / OCPP / Network (Ethernet/LTE)*
+            and follow site-wide vs single → reboot → physical layer → evidence.
           options:
-            - label: "Yes"
-              next: GDUI_DONE_STAB
-            - label: "No"
-              next: GDUI_REBOOT
-
-        GDUI_REBOOT:
-          prompt: |
-            Perform a controlled reboot.
-          options:
-            - label: "Recovered"
-              next: GDUI_DONE_RESOLVED
-            - label: "Still frozen"
-              next: GDUI_ESC
-
-        GDUI_DONE_RESOLVED:
-          prompt: |
-            ✅ *Resolved*
-            UI restored.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDUI_DONE_STAB:
-          prompt: |
-            ⚠️ *Stabilised*
-            Monitor until session ends and escalate if repeatable.
-          options:
-            - label: "🏠 Back to menu"
-              next: "__MENU_GENERAL_DC__"
-
-        GDUI_ESC:
-          prompt: |
-            *Escalate — HMI Frozen*
-            Include photo/video, timestamps,
-            and reboot method used.
-          options:
-            - label: "🏠 Back to menu"
+            - label: "🏠 General DC menu (open Offline/Network cluster)"
               next: "__MENU_GENERAL_DC__"
