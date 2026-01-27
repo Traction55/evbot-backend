@@ -13,6 +13,11 @@
  *    - Fault select:  <pack>:fault:<id>
  * - Backwards compatible: still accepts legacy "AUTEL:<id>", "KEMPOWER:<id>", "TRITIUM:<id>", "GENERAL_DC:<id>"
  *
+ * ✅ FIX: “No active fault selected” after tapping menus/reset
+ * - Adds per-message DT state cache:
+ *    dtState = per chat (normal flow)
+ *    dtMsgState = per message (old buttons still work)
+ *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
  *   PUBLIC_URL=https://your-railway-domain.up.railway.app
@@ -194,19 +199,43 @@ app.get("/health", (req, res) =>
 // Debug endpoints
 app.get("/debug/general_dc", (req, res) => {
   const data = loadGeneralDc();
-  res.json({ file: GENERAL_DC_FILE, exists: fs.existsSync(GENERAL_DC_FILE), count: data.faults.length, ids: data.faults.map((f) => f.id).slice(0, 50), titles: data.faults.map((f) => f.title).slice(0, 50) });
+  res.json({
+    file: GENERAL_DC_FILE,
+    exists: fs.existsSync(GENERAL_DC_FILE),
+    count: data.faults.length,
+    ids: data.faults.map((f) => f.id).slice(0, 50),
+    titles: data.faults.map((f) => f.title).slice(0, 50),
+  });
 });
 app.get("/debug/autel", (req, res) => {
   const data = loadAutel();
-  res.json({ file: AUTEL_FILE, exists: fs.existsSync(AUTEL_FILE), count: data.faults.length, ids: data.faults.map((f) => f.id).slice(0, 50), titles: data.faults.map((f) => f.title).slice(0, 50) });
+  res.json({
+    file: AUTEL_FILE,
+    exists: fs.existsSync(AUTEL_FILE),
+    count: data.faults.length,
+    ids: data.faults.map((f) => f.id).slice(0, 50),
+    titles: data.faults.map((f) => f.title).slice(0, 50),
+  });
 });
 app.get("/debug/kempower", (req, res) => {
   const data = loadKempower();
-  res.json({ file: KEMPOWER_FILE, exists: fs.existsSync(KEMPOWER_FILE), count: data.faults.length, ids: data.faults.map((f) => f.id).slice(0, 50), titles: data.faults.map((f) => f.title).slice(0, 50) });
+  res.json({
+    file: KEMPOWER_FILE,
+    exists: fs.existsSync(KEMPOWER_FILE),
+    count: data.faults.length,
+    ids: data.faults.map((f) => f.id).slice(0, 50),
+    titles: data.faults.map((f) => f.title).slice(0, 50),
+  });
 });
 app.get("/debug/tritium", (req, res) => {
   const data = loadTritium();
-  res.json({ file: TRITIUM_FILE, exists: fs.existsSync(TRITIUM_FILE), count: data.faults.length, ids: data.faults.map((f) => f.id).slice(0, 50), titles: data.faults.map((f) => f.title).slice(0, 50) });
+  res.json({
+    file: TRITIUM_FILE,
+    exists: fs.existsSync(TRITIUM_FILE),
+    count: data.faults.length,
+    ids: data.faults.map((f) => f.id).slice(0, 50),
+    titles: data.faults.map((f) => f.title).slice(0, 50),
+  });
 });
 
 // Optional: verify image file exists via API
@@ -283,6 +312,29 @@ const reportState = new Map();
  * chatId -> { pack, faultId, history: [nodeId...], messageId }
  */
 const dtState = new Map();
+
+/**
+ * ✅ DT state bound to the message that created the buttons
+ * Fixes: old dt:o:* presses after user taps menus/reset
+ * key = `${chatId}:${messageId}` -> { pack, faultId, history }
+ */
+const dtMsgState = new Map();
+function dtMsgKey(chatId, messageId) {
+  return `${chatId}:${messageId}`;
+}
+function setDtForMessage(chatId, messageId, patch) {
+  if (!chatId || !messageId) return null;
+  const key = dtMsgKey(chatId, messageId);
+  const cur = dtMsgState.get(key) || { pack: "", faultId: "", history: [] };
+  const next = { ...cur, ...patch };
+  if (!Array.isArray(next.history)) next.history = [];
+  dtMsgState.set(key, next);
+  return next;
+}
+function getDtFromMessage(chatId, messageId) {
+  if (!chatId || !messageId) return null;
+  return dtMsgState.get(dtMsgKey(chatId, messageId)) || null;
+}
 
 function resetDt(chatId) {
   dtState.delete(chatId);
@@ -362,6 +414,15 @@ function buildLegacyFaultHtml(f) {
 async function showFaultCard({ chatId, messageId, pack, fault }) {
   setDt(chatId, { pack, faultId: String(fault?.id || ""), history: [], messageId: messageId || null });
 
+  // ✅ also bind DT state to this messageId so old buttons remain valid
+  if (messageId) {
+    setDtForMessage(chatId, messageId, {
+      pack,
+      faultId: String(fault?.id || ""),
+      history: [],
+    });
+  }
+
   const rows = [];
 
   if (fault?.decision_tree?.start_node && fault?.decision_tree?.nodes) {
@@ -429,6 +490,16 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
 
   setDt(chatId, { pack, faultId: String(fault.id), messageId: messageId || null });
   pushDtHistory(chatId, nodeId);
+
+  // ✅ keep per-message DT state in sync as the user clicks through
+  if (messageId) {
+    const st = getDt(chatId);
+    setDtForMessage(chatId, messageId, {
+      pack: st?.pack || pack,
+      faultId: st?.faultId || String(fault?.id || ""),
+      history: Array.isArray(st?.history) ? st.history : [],
+    });
+  }
 
   const text = node.prompt || "…";
 
@@ -617,7 +688,12 @@ function buildPackMenuKeyboard(pack) {
   const rows = [];
 
   if (!faults.length) {
-    rows.push([{ text: `⚠️ No ${pack === "general_dc" ? "General DC" : cap(pack)} faults loaded (check /debug/${pack})`, callback_data: "noop" }]);
+    rows.push([
+      {
+        text: `⚠️ No ${pack === "general_dc" ? "General DC" : cap(pack)} faults loaded (check /debug/${pack})`,
+        callback_data: "noop",
+      },
+    ]);
   } else {
     faults.forEach((f) => rows.push([{ text: f.title, callback_data: cbFault(pack, f.id) }]));
   }
@@ -649,6 +725,7 @@ function buildGeneralDcQuickKeyboard() {
 }
 
 async function showGeneralDcMenu(chatId, messageId) {
+  // NOTE: We still reset chat-level DT state, BUT message-level state keeps old buttons working.
   resetDt(chatId);
   return upsertMessage(chatId, {
     messageId,
@@ -764,7 +841,6 @@ bot.on("message", async (msg) => {
 
   if (st.step === "site") {
     setReport(chatId, { data: { site: text } });
-    // Keep it minimal for now; you can paste your full wizard back in here later.
     return bot.sendMessage(chatId, "✅ Site captured. (Paste your full report wizard steps here if needed.)", {
       parse_mode: "HTML",
     });
@@ -873,8 +949,16 @@ bot.on("callback_query", async (q) => {
   /* =========================
      DECISION TREE (SAFE)
      ========================= */
+
+  // ✅ helper: recover dt state from message if chat state missing
+  function getActiveDtState() {
+    const st = getDt(chatId) || getDtFromMessage(chatId, messageId);
+    if (st && !getDt(chatId)) setDt(chatId, st);
+    return st;
+  }
+
   if (data === "dt:start") {
-    const st = getDt(chatId);
+    const st = getActiveDtState();
     if (!st?.pack || !st?.faultId) {
       return bot.sendMessage(chatId, "⚠️ No active fault selected. Go back and open a fault first.");
     }
@@ -883,6 +967,8 @@ bot.on("callback_query", async (q) => {
       return bot.sendMessage(chatId, "⚠️ This fault has no decision tree.");
     }
     setDt(chatId, { history: [] });
+    if (messageId) setDtForMessage(chatId, messageId, { history: [] });
+
     return renderYamlDecisionNode({
       chatId,
       messageId,
@@ -893,7 +979,7 @@ bot.on("callback_query", async (q) => {
   }
 
   if (data.startsWith("dt:o:")) {
-    const st = getDt(chatId);
+    const st = getActiveDtState();
     if (!st?.pack || !st?.faultId) {
       return bot.sendMessage(chatId, "⚠️ No active fault selected. Open a fault first.");
     }
@@ -924,13 +1010,24 @@ bot.on("callback_query", async (q) => {
   }
 
   if (data === "dt:bk") {
-    const st = getDt(chatId);
+    const st = getActiveDtState();
     if (!st?.pack || !st?.faultId) return;
 
     const fault = getFaultById(st.pack, st.faultId);
     if (!fault) return showManufacturerMenu(chatId, messageId);
 
     const prevNode = popDtHistory(chatId);
+
+    // keep message-level history aligned (best effort)
+    if (messageId) {
+      const ms = getDtFromMessage(chatId, messageId);
+      if (ms?.history?.length > 1) {
+        const h = [...ms.history];
+        h.pop();
+        setDtForMessage(chatId, messageId, { history: h });
+      }
+    }
+
     if (!prevNode) {
       return showFaultCard({ chatId, messageId, pack: st.pack, fault });
     }
@@ -945,7 +1042,7 @@ bot.on("callback_query", async (q) => {
   }
 
   if (data === "dt:mn") {
-    const st = getDt(chatId);
+    const st = getActiveDtState();
     if (!st?.pack) return showManufacturerMenu(chatId, messageId);
     resetDt(chatId);
 
