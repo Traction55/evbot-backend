@@ -23,6 +23,10 @@
  * - Adds safe fallbacks for missing common nodes (GD_ESC / GD_DONE)
  * - Adds support for route node IDs: __ROUTE_GENERAL_DC_OFFLINE__ / __ROUTE_GENERAL_DC_OVERTEMP__
  *
+ * ✅ NEW (Feedback):
+ * - Adds one-tap “Was this useful?” buttons on fault cards + decision tree nodes
+ * - Logs feedback events to console as JSON (Railway logs)
+ *
  * IMPORTANT ENV:
  *   TELEGRAM_BOT_TOKEN=...
  *   PUBLIC_URL=https://your-railway-domain.up.railway.app
@@ -315,6 +319,44 @@ async function upsertPhotoOrText(chatId, opts) {
 }
 
 /* =========================
+   FEEDBACK (one-tap)
+   ========================= */
+function encodeFbCtx(ctx) {
+  try {
+    const json = JSON.stringify(ctx || {});
+    // URL-safe base64 (no padding)
+    return Buffer.from(json)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/g, "")
+      .slice(0, 60); // keep callback_data short
+  } catch (_) {
+    return "";
+  }
+}
+function decodeFbCtx(token) {
+  try {
+    if (!token) return {};
+    const b64 = String(token).replace(/-/g, "+").replace(/_/g, "/");
+    const padded = b64 + "===".slice((b64.length + 3) % 4);
+    const json = Buffer.from(padded, "base64").toString("utf8");
+    return JSON.parse(json);
+  } catch (_) {
+    return {};
+  }
+}
+function usefulButtons(ctx = {}) {
+  const token = encodeFbCtx(ctx);
+  return [
+    [
+      { text: "👍 Useful", callback_data: `fb:yes:${token}` },
+      { text: "👎 Not useful", callback_data: `fb:no:${token}` },
+    ],
+  ];
+}
+
+/* =========================
    STATE
    ========================= */
 const reportState = new Map();
@@ -441,6 +483,9 @@ async function showFaultCard({ chatId, messageId, pack, fault }) {
     rows.push([{ text: "🧭 Start troubleshooting", callback_data: "dt:start" }]);
   }
 
+  // ✅ One-tap feedback
+  rows.push(...usefulButtons({ pack, faultId: fault?.id || "", source: "fault_card" }));
+
   if (ENABLE_REPORTS) {
     rows.push([{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, fault.id) }]);
   }
@@ -496,6 +541,7 @@ function buildCommonNodeFallback(nodeId, pack, faultTitle = "") {
         `Confirm the charger returns to *Ready* and survives a short retest session.\n\n` +
         `If it re-faults, capture evidence and escalate.`,
       buttons: [
+        ...usefulButtons({ pack, faultTitle, nodeId: "GD_DONE", source: "fallback_node" }),
         [{ text: "🏠 Menu", callback_data: "dt:mn" }],
         [{ text: "⬅️ Back", callback_data: "dt:bk" }],
         [{ text: "⬅️ Pack menu", callback_data: cbPackMenu(pack) }],
@@ -504,7 +550,9 @@ function buildCommonNodeFallback(nodeId, pack, faultTitle = "") {
   }
 
   if (id === "GD_ESC") {
-    const reportRow = ENABLE_REPORTS ? [[{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, "") }]] : [];
+    const reportRow = ENABLE_REPORTS
+      ? [[{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, "") }]]
+      : [];
     return {
       text:
         `🗂️ *Escalate*\n` +
@@ -515,6 +563,7 @@ function buildCommonNodeFallback(nodeId, pack, faultTitle = "") {
         `- Photos (HMI + cabinet/filters/fans where relevant)\n` +
         `- What you tried (reboot, filters cleaned, fans checked, etc.)\n`,
       buttons: [
+        ...usefulButtons({ pack, faultTitle, nodeId: "GD_ESC", source: "fallback_node" }),
         ...reportRow,
         [{ text: "🏠 Menu", callback_data: "dt:mn" }],
         [{ text: "⬅️ Back", callback_data: "dt:bk" }],
@@ -620,6 +669,9 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
   opts.forEach((opt, idx) => {
     rows.push([{ text: opt.label || opt.text || "Next", callback_data: `dt:o:${idx}` }]);
   });
+
+  // ✅ One-tap feedback on DT nodes
+  rows.push(...usefulButtons({ pack, faultId: fault?.id || "", nodeId, source: "decision_tree" }));
 
   if (ENABLE_REPORTS) {
     rows.push([{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, fault.id) }]);
@@ -1010,6 +1062,24 @@ bot.on("callback_query", async (q) => {
 
   if (!chatId) return;
   if (data === "noop") return;
+
+  /* --------- FEEDBACK --------- */
+  if (data.startsWith("fb:")) {
+    const [, vote, token] = data.split(":");
+    const ctx = decodeFbCtx(token);
+
+    logEvent("feedback", {
+      vote,
+      chatId,
+      messageId,
+      ...ctx,
+    });
+
+    return bot.sendMessage(
+      chatId,
+      vote === "yes" ? "🙏 Thanks! Glad it helped." : "🙏 Thanks — that helps me improve it."
+    );
+  }
 
   /* --------- GLOBAL NAV --------- */
   if (data === "reset" || data === "menu:mfr") {
