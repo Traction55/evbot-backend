@@ -29,6 +29,9 @@
  *   USE_WEBHOOK=true   (Railway)
  *   USE_WEBHOOK=false  (Local)
  *   TELEGRAM_WEBHOOK_SECRET=optional_secret
+ *
+ * OPTIONAL FEATURE FLAGS:
+ *   ENABLE_REPORTS=true|false   (default false if unset)
  */
 
 require("dotenv").config({ path: require("path").join(__dirname, ".env") });
@@ -74,6 +77,9 @@ function stripEmojisForFinal(s = "") {
 const PORT = Number(process.env.PORT) || 3000;
 const BOT_TOKEN = (process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const TELEGRAM_WEBHOOK_SECRET = (process.env.TELEGRAM_WEBHOOK_SECRET || "").trim();
+
+// Feature flags (default OFF)
+const ENABLE_REPORTS = String(process.env.ENABLE_REPORTS || "").toLowerCase() === "true";
 
 function normalizePublicUrl(raw) {
   const v = (raw || "").trim();
@@ -198,6 +204,7 @@ app.get("/health", (req, res) =>
     useWebhookEnv: USE_WEBHOOK,
     secretEnabled: !!TELEGRAM_WEBHOOK_SECRET,
     imagesDir: IMAGES_DIR,
+    enableReports: ENABLE_REPORTS,
   })
 );
 
@@ -434,7 +441,10 @@ async function showFaultCard({ chatId, messageId, pack, fault }) {
     rows.push([{ text: "🧭 Start troubleshooting", callback_data: "dt:start" }]);
   }
 
-  rows.push([{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, fault.id) }]);
+  if (ENABLE_REPORTS) {
+    rows.push([{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, fault.id) }]);
+  }
+
   rows.push([{ text: "⬅️ Back", callback_data: cbPackMenu(pack) }]);
 
   // YAML preferred: response.telegram_markdown
@@ -494,6 +504,7 @@ function buildCommonNodeFallback(nodeId, pack, faultTitle = "") {
   }
 
   if (id === "GD_ESC") {
+    const reportRow = ENABLE_REPORTS ? [[{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, "") }]] : [];
     return {
       text:
         `🗂️ *Escalate*\n` +
@@ -504,7 +515,7 @@ function buildCommonNodeFallback(nodeId, pack, faultTitle = "") {
         `- Photos (HMI + cabinet/filters/fans where relevant)\n` +
         `- What you tried (reboot, filters cleaned, fans checked, etc.)\n`,
       buttons: [
-        [{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, "") }], // pack-level; fixed in render
+        ...reportRow,
         [{ text: "🏠 Menu", callback_data: "dt:mn" }],
         [{ text: "⬅️ Back", callback_data: "dt:bk" }],
       ],
@@ -610,7 +621,9 @@ async function renderYamlDecisionNode({ chatId, messageId, pack, fault, nodeId }
     rows.push([{ text: opt.label || opt.text || "Next", callback_data: `dt:o:${idx}` }]);
   });
 
-  rows.push([{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, fault.id) }]);
+  if (ENABLE_REPORTS) {
+    rows.push([{ text: "🧾 Create report for this fault", callback_data: cbReportFromFault(pack, fault.id) }]);
+  }
   rows.push([{ text: "⬅️ Back", callback_data: "dt:bk" }]);
   rows.push([{ text: `🏠 ${pack === "general_dc" ? "General DC" : cap(pack)} menu`, callback_data: "dt:mn" }]);
 
@@ -701,6 +714,8 @@ function formatReportHtml(data) {
 }
 
 async function startReport(chatId) {
+  if (!ENABLE_REPORTS) return bot.sendMessage(chatId, "🚫 Report builder is disabled for now.");
+
   setReport(chatId, {
     step: "site",
     data: {
@@ -729,6 +744,8 @@ async function startReport(chatId) {
 }
 
 async function startReportFromFault(chatId, pack, fault) {
+  if (!ENABLE_REPORTS) return bot.sendMessage(chatId, "🚫 Report builder is disabled for now.");
+
   setReport(chatId, {
     step: "site",
     data: {
@@ -771,7 +788,7 @@ function showManufacturerMenu(chatId, messageId) {
     [{ text: "🔵 Autel", callback_data: "mfr:autel" }],
     [{ text: "🟢 Kempower", callback_data: "mfr:kempower" }],
     [{ text: "🔺 Tritium", callback_data: "mfr:tritium" }],
-    [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
+    ...(ENABLE_REPORTS ? [[{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]] : []),
     [{ text: "🔁 Reset", callback_data: "reset" }],
   ];
 
@@ -799,7 +816,7 @@ function buildPackMenuKeyboard(pack) {
     faults.forEach((f) => rows.push([{ text: f.title, callback_data: cbFault(pack, f.id) }]));
   }
 
-  rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
+  if (ENABLE_REPORTS) rows.push([{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]);
   rows.push([{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }]);
   rows.push([{ text: "🔁 Reset", callback_data: "reset" }]);
 
@@ -807,8 +824,6 @@ function buildPackMenuKeyboard(pack) {
 }
 
 // ✅ Phase 1: General DC quick picks are “canonical symptom buckets”
-// - We keep only the highest value / non-overlapping entry points.
-// - We keep “View all” as the escape hatch.
 function buildGeneralDcQuickKeyboard() {
   return [
     [{ text: "🟥 Dead / Won’t Power On", callback_data: cbFault("general_dc", "general_dc_will_not_power_on") }],
@@ -820,14 +835,8 @@ function buildGeneralDcQuickKeyboard() {
     [{ text: "⬛ E-Stop / Interlock active", callback_data: cbFault("general_dc", "general_dc_estop_interlock_active") }],
     [{ text: "🟠 Low power / Derating", callback_data: cbFault("general_dc", "general_dc_power_derating_low_power") }],
 
-    // 🚫 Phase 1 change:
-    // We REMOVE HMI Frozen from the quick menu because it commonly duplicates “powers on but won’t start”
-    // and your current YAML had shared-node references causing “Decision node not found”.
-    // It remains accessible via “View all General DC faults” until Phase 2 merges it properly.
-    // [{ text: "🖥️ HMI Frozen", callback_data: cbFault("general_dc", "general_dc_hmi_frozen_unresponsive") }],
-
     [{ text: "📋 View all General DC faults", callback_data: cbPackAll("general_dc") }],
-    [{ text: "🧾 Build a report (/report)", callback_data: "r:new" }],
+    ...(ENABLE_REPORTS ? [[{ text: "🧾 Build a report (/report)", callback_data: "r:new" }]] : []),
     [{ text: "⬅️ Back to Manufacturer", callback_data: "menu:mfr" }],
     [{ text: "🔁 Reset", callback_data: "reset" }],
   ];
@@ -925,6 +934,7 @@ bot.onText(/^\/tritium$/, async (msg) => {
 });
 
 bot.onText(/^\/report$/, async (msg) => {
+  if (!ENABLE_REPORTS) return bot.sendMessage(msg.chat.id, "🚫 Report builder is disabled for now.");
   await startReport(msg.chat.id);
 });
 
@@ -938,6 +948,8 @@ bot.onText(/^\/cancel$/, async (msg) => {
    REPORT TEXT CAPTURE (minimal)
    ========================= */
 bot.on("message", async (msg) => {
+  if (!ENABLE_REPORTS) return;
+
   const chatId = msg?.chat?.id;
   const text = (msg?.text || "").trim();
   if (!chatId) return;
@@ -959,6 +971,8 @@ bot.on("message", async (msg) => {
    PHOTO CAPTURE (Report) - optional
    ========================= */
 bot.on("photo", async (msg) => {
+  if (!ENABLE_REPORTS) return;
+
   const chatId = msg?.chat?.id;
   if (!chatId) return;
   const st = reportState.get(chatId);
@@ -1005,6 +1019,7 @@ bot.on("callback_query", async (q) => {
   }
 
   if (data === "r:new") {
+    if (!ENABLE_REPORTS) return bot.sendMessage(chatId, "🚫 Report builder is disabled for now.");
     clearReport(chatId);
     resetDt(chatId);
     return startReport(chatId);
@@ -1046,6 +1061,7 @@ bot.on("callback_query", async (q) => {
 
   /* --------- REPORT FROM FAULT CARD --------- */
   if (data.startsWith("RF|")) {
+    if (!ENABLE_REPORTS) return bot.sendMessage(chatId, "🚫 Report builder is disabled for now.");
     const [, pack, faultId] = data.split("|");
     const fault = getFaultById(pack, faultId);
     if (!fault) return bot.sendMessage(chatId, "⚠️ Could not start report: fault not found.");
@@ -1271,6 +1287,7 @@ app.listen(PORT, "0.0.0.0", async () => {
   console.log(`WEBHOOK_URL: ${WEBHOOK_URL || "(blank)"}`);
   console.log(`USE_WEBHOOK env: ${USE_WEBHOOK}`);
   console.log(`Images: /images -> ${IMAGES_DIR}`);
+  console.log(`ENABLE_REPORTS: ${ENABLE_REPORTS}`);
 
   if (useWebhook) {
     try {
